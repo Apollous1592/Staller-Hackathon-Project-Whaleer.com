@@ -8,9 +8,10 @@ interface Bot {
   name: string;
   strategy: string;
   commission_rate: number;
-  developer_rate: number;
-  platform_rate: number;
-  total_commission: number;
+  total_commission_rate: number;  // Developer'ın belirleği toplam oran
+  developer_rate: number;          // Developer net payı
+  platform_rate: number;           // Platform payı
+  platform_cut_percent: number;    // Sabit %10
   min_commission_deposit: number;
   deposit_address: string;
   whale_address: string;
@@ -755,15 +756,15 @@ export default function Home() {
                 <div className="details">
                   <div className="detail-item" style={{ background: '#fef3c7', padding: '0.5rem', borderRadius: '6px' }}>
                     <div className="detail-label">🧑‍💻 Developer Commission</div>
-                    <div className="detail-value" style={{ color: '#b45309', fontWeight: 'bold' }}>{bot.developer_rate || 10}% of profits</div>
+                    <div className="detail-value" style={{ color: '#b45309', fontWeight: 'bold' }}>{bot.developer_rate?.toFixed(1) || 9}% of profits</div>
                   </div>
                   <div className="detail-item" style={{ background: '#dbeafe', padding: '0.5rem', borderRadius: '6px' }}>
                     <div className="detail-label">🏢 Platform Fee</div>
-                    <div className="detail-value" style={{ color: '#1d4ed8', fontWeight: 'bold' }}>{bot.platform_rate || 1}% of profits</div>
+                    <div className="detail-value" style={{ color: '#1d4ed8', fontWeight: 'bold' }}>{bot.platform_rate?.toFixed(1) || 1}% of profits</div>
                   </div>
                   <div className="detail-item">
                     <div className="detail-label">📊 Total Commission</div>
-                    <div className="detail-value">{bot.total_commission || 11}% (from your deposit)</div>
+                    <div className="detail-value">{bot.total_commission_rate || 10}% (from your deposit)</div>
                   </div>
                   <div className="detail-item">
                     <div className="detail-label">Min Commission Deposit</div>
@@ -1036,7 +1037,7 @@ export default function Home() {
               From: {wallet.publicKey?.substring(0, 12)}...{wallet.publicKey?.slice(-8)}<br />
               To: Smart Contract<br />
               Amount: {depositAmount} XLM<br />
-              Commission: {selectedBot.total_commission || 11}% (on profits only)
+              Commission: {selectedBot.total_commission_rate || 10}% (on profits only)
             </div>
 
             <div className="modal-actions">

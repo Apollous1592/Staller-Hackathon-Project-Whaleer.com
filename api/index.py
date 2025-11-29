@@ -80,17 +80,17 @@ NATIVE_ASSET_ID = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
 user_sessions = {}
 
 # Trading Bots - Her bot için developer adresi ve komisyon oranları
-# developer_rate: Kârın yüzde kaçı developer'a gidecek
-# platform_rate: Kârın yüzde kaçı platform'a gidecek
+# total_commission_rate: Kârın yüzde kaçı toplam komisyon olarak kesilecek
+# platform_cut_percent: Toplam komisyonun yüzde kaçı platform'a gidecek (developer'dan kesilir)
 # Contract'a gönderilecek değerler hesaplanır (profit_share_bps, platform_cut_bps)
 TRADING_BOTS = [
     {
         "id": "bot-alpha",
         "name": "Bot Alpha",
         "strategy": "Trend Following - EMA crossovers",
-        "developer_rate": 10,  # Kârın %10'u developer'a
-        "platform_rate": 1,    # Kârın %1'i platform'a (developer'ın %10'u)
-        # Toplam: %11 komisyon
+        "total_commission_rate": 10,  # Kârın %10'u toplam komisyon
+        "platform_cut_percent": 10,   # Komisyonun %10'u platform'a (developer'dan kesilir)
+        # Developer net: %9, Platform: %1 (toplam %10)
         "min_commission_deposit": 10,
         "developer": DEVELOPER_PUBLIC_KEY,
         "platform": PLATFORM_PUBLIC_KEY,
@@ -99,9 +99,9 @@ TRADING_BOTS = [
         "id": "bot-beta",
         "name": "Bot Beta", 
         "strategy": "Arbitrage - Cross-exchange",
-        "developer_rate": 10,  # Kârın %10'u developer'a
-        "platform_rate": 1,    # Kârın %1'i platform'a (developer'ın %10'u)
-        # Toplam: %11 komisyon
+        "total_commission_rate": 10,  # Kârın %10'u toplam komisyon
+        "platform_cut_percent": 10,   # Komisyonun %10'u platform'a (developer'dan kesilir)
+        # Developer net: %9, Platform: %1 (toplam %10)
         "min_commission_deposit": 5,
         "developer": DEVELOPER_PUBLIC_KEY,
         "platform": PLATFORM_PUBLIC_KEY,
@@ -110,9 +110,9 @@ TRADING_BOTS = [
         "id": "bot-gamma",
         "name": "Bot Gamma",
         "strategy": "DCA - Smart timing",
-        "developer_rate": 10,  # Kârın %10'u developer'a
-        "platform_rate": 1,    # Kârın %1'i platform'a (developer'ın %10'u)
-        # Toplam: %11 komisyon
+        "total_commission_rate": 10,  # Kârın %10'u toplam komisyon
+        "platform_cut_percent": 10,   # Komisyonun %10'u platform'a (developer'dan kesilir)
+        # Developer net: %9, Platform: %1 (toplam %10)
         "min_commission_deposit": 5,
         "developer": DEVELOPER_PUBLIC_KEY,
         "platform": PLATFORM_PUBLIC_KEY,
@@ -145,34 +145,26 @@ def generate_daily_performance():
     """Generate random daily performance between -3% and +5%"""
     return round(random.uniform(-3.0, 5.0), 2)
 
-def calculate_contract_rates(developer_rate: float, platform_rate: float):
+def calculate_contract_rates(total_commission_rate: float, platform_cut_percent: float):
     """
-    İstenen developer ve platform oranlarından contract'a gönderilecek
+    Developer'ın belirlediği toplam komisyon oranından contract'a gönderilecek
     profit_share_bps ve platform_cut_bps hesaplar.
     
-    İstenen: developer=%30, platform=%10 → Toplam %40 komisyon
+    Yeni mantık:
+    - Developer %10 komisyon belirlemiş
+    - Platform sabit %10 alıyor (developer'ın payından)
     
-    Contract mantığı:
-    - total_commission = profit * profit_share_bps / 10000
-    - platform_fee = total_commission * platform_cut_bps / 10000
-    - dev_fee = total_commission - platform_fee
+    Örnek: total_commission_rate=10, platform_cut_percent=10
+    - Kullanıcıdan kesilen: %10
+    - Platform: %10'un %10'u = %1
+    - Developer net: %10 - %1 = %9
     
-    Çözüm:
-    - profit_share_bps = (developer + platform) * 100 = 4000
-    - platform_cut_bps = (platform / toplam) * 10000 = 2500
-    
-    Sonuç:
-    - total = profit * 40% = 40 XLM
-    - platform = 40 * 25% = 10 XLM ✅
-    - dev = 40 - 10 = 30 XLM ✅
+    Contract'a:
+    - profit_share_bps = 1000 (%10 toplam komisyon)
+    - platform_cut_bps = 1000 (%10 of commission goes to platform)
     """
-    total_rate = developer_rate + platform_rate
-    profit_share_bps = int(total_rate * 100)  # %40 → 4000
-    
-    if total_rate > 0:
-        platform_cut_bps = int((platform_rate / total_rate) * 10000)  # 10/40 * 10000 = 2500
-    else:
-        platform_cut_bps = 0
+    profit_share_bps = int(total_commission_rate * 100)  # %10 → 1000
+    platform_cut_bps = int(platform_cut_percent * 100)   # %10 → 1000
     
     return profit_share_bps, platform_cut_bps
 
@@ -298,28 +290,26 @@ def contract_init_vault(
     user_id: int,
     user_address: str,
     developer_address: str,
-    developer_rate: float = 30,  # Kârın %30'u developer'a
-    platform_rate: float = 10,   # Kârın %10'u platform'a
+    total_commission_rate: float = 10,  # Developer'ın belirlediği toplam oran
+    platform_cut_percent: float = 10,   # Sabit %10 platform kesintisi
 ):
     """
     Soroban kontratındaki init_vault fonksiyonunu çağırır.
     
-    İstenen davranış:
-    - 100 XLM kâr olduğunda:
-      - Developer: 30 XLM (%30)
-      - Platform: 10 XLM (%10)
-      - Toplam kesinti: 40 XLM (depozito'dan)
+    Yeni davranış:
+    - Developer %10 komisyon belirlemiş
+    - Platform sabit %10 alıyor (developer'ın payından)
     
-    Contract mantığı:
-    - total_commission = profit * profit_share_bps / 10000
-    - platform_fee = total_commission * platform_cut_bps / 10000
-    - dev_fee = total_commission - platform_fee
-    
-    Bu yüzden:
-    - profit_share_bps = (developer + platform) * 100 = 4000 (%40)
-    - platform_cut_bps = (platform / toplam) * 10000 = 2500 (%25 of total)
+    Örnek: 100 XLM kâr
+    - Toplam komisyon: 10 XLM (%10)
+    - Platform: 1 XLM (%10 of 10 XLM)
+    - Developer net: 9 XLM
     """
-    print(f"\n{'='*60}")
+    # Platform rate hesapla (gösterim için)
+    platform_rate = total_commission_rate * platform_cut_percent / 100
+    developer_net = total_commission_rate - platform_rate
+    
+    print(f"\\n{'='*60}")
     print("🔧 INIT VAULT - Soroban Contract Call")
     print(f"{'='*60}")
     print(f"Bot ID: {bot_id}")
@@ -327,15 +317,15 @@ def contract_init_vault(
     print(f"User Address: {user_address}")
     print(f"Developer Address: {developer_address}")
     print(f"Platform Address: {PLATFORM_PUBLIC_KEY}")
-    print(f"Developer Rate: {developer_rate}% of profit")
-    print(f"Platform Rate: {platform_rate}% of profit")
-    print(f"Total Commission: {developer_rate + platform_rate}% of profit")
+    print(f"Total Commission Rate: {total_commission_rate}% of profit")
+    print(f"Platform Cut: {platform_cut_percent}% of commission → {platform_rate}% of profit")
+    print(f"Developer Net: {developer_net}% of profit")
     
     # Contract'a gönderilecek BPS değerlerini hesapla
-    profit_share_bps, platform_cut_bps = calculate_contract_rates(developer_rate, platform_rate)
+    profit_share_bps, platform_cut_bps = calculate_contract_rates(total_commission_rate, platform_cut_percent)
     
     print(f"→ profit_share_bps: {profit_share_bps} (toplam komisyon oranı)")
-    print(f"→ platform_cut_bps: {platform_cut_bps} (platform'un toplam içindeki payı)")
+    print(f"→ platform_cut_bps: {platform_cut_bps} (platform'un komisyondan aldığı pay)")
     
     # Validation
     if profit_share_bps < 0 or platform_cut_bps < 0:
@@ -498,13 +488,22 @@ def get_bots():
     """Return list of available trading bots with commission structure"""
     bots_public = []
     for bot in TRADING_BOTS:
+        total_rate = bot['total_commission_rate']  # Developer'ın belirlediği oran (örn: %10)
+        platform_cut = bot['platform_cut_percent']  # Sabit %10 (developer'dan kesilir)
+        
+        # Platform = total_rate * platform_cut / 100
+        # Developer net = total_rate - platform
+        platform_rate = total_rate * platform_cut / 100
+        developer_net_rate = total_rate - platform_rate
+        
         bots_public.append({
             "id": bot['id'],
             "name": bot['name'],
             "strategy": bot['strategy'],
-            "developer_rate": bot['developer_rate'],   # Kârın %X'i developer'a
-            "platform_rate": bot['platform_rate'],     # Kârın %X'i platform'a
-            "total_commission": bot['developer_rate'] + bot['platform_rate'],  # Toplam komisyon
+            "total_commission_rate": total_rate,       # Toplam kesinti (kullanıcıdan)
+            "developer_rate": developer_net_rate,       # Developer'ın net payı
+            "platform_rate": platform_rate,             # Platform payı
+            "platform_cut_percent": platform_cut,       # Platform kesintisi %10
             "min_commission_deposit": bot['min_commission_deposit'],
             "developer": bot['developer'],
             "platform": bot['platform'],
@@ -560,8 +559,12 @@ def create_deposit_tx():
         
         # Bot'tan developer ve oranları al
         developer_address = bot['developer']
-        developer_rate = bot['developer_rate']  # Kârın %30'u developer'a
-        platform_rate = bot['platform_rate']    # Kârın %10'u platform'a
+        total_rate = bot['total_commission_rate']  # Developer'ın belirlediği toplam oran
+        platform_cut = bot['platform_cut_percent']  # Sabit %10 platform kesintisi
+        
+        # Platform developer'dan alıyor
+        platform_rate = total_rate * platform_cut / 100
+        developer_net_rate = total_rate - platform_rate
         
         # Init vault if needed (ignore errors - might already exist)
         try:
@@ -570,8 +573,8 @@ def create_deposit_tx():
                 user_id=user_hash,
                 user_address=user_public_key,
                 developer_address=developer_address,
-                developer_rate=developer_rate,
-                platform_rate=platform_rate,
+                total_commission_rate=total_rate,
+                platform_cut_percent=platform_cut,
             )
         except Exception as e:
             print(f"[INIT_VAULT] Muhtemelen zaten var: {e}")
@@ -589,9 +592,9 @@ def create_deposit_tx():
             "contract_id": CONTRACT_ID,
             "developer": developer_address,
             "platform": PLATFORM_PUBLIC_KEY,
-            "developer_rate": developer_rate,
+            "total_commission_rate": total_rate,
+            "developer_rate": developer_net_rate,
             "platform_rate": platform_rate,
-            "total_commission_rate": developer_rate + platform_rate,
         })
         
     except Exception as e:
@@ -718,27 +721,29 @@ def simulate_day():
             taxable_profit = new_balance - high_water_mark
             taxable_profit_xlm = taxable_profit / xlm_usd_rate  # USD → XLM
             
-            # İstenen davranış:
-            # - Developer: kârın %30'u
-            # - Platform: kârın %10'u
-            # - Toplam: kârın %40'ı (depozito'dan kesilir)
+            # Komisyon mantığı:
+            # - Toplam komisyon: Kârın %10'u (total_commission_rate)
+            # - Platform payı: Toplam komisyonun %10'u (platform_cut_percent)
+            # - Developer payı: Toplam komisyon - Platform payı
+            # Örnek: $100 kâr → $10 toplam komisyon → $1 platform, $9 developer
             
-            developer_rate = bot['developer_rate']  # %30
-            platform_rate = bot['platform_rate']    # %10
-            total_rate = developer_rate + platform_rate  # %40
+            total_commission_rate = bot['total_commission_rate']  # %10
+            platform_cut_percent = bot['platform_cut_percent']    # %10 of commission
             
-            # Hesapla
-            developer_commission_xlm = taxable_profit_xlm * (developer_rate / 100)
-            platform_commission_xlm = taxable_profit_xlm * (platform_rate / 100)
-            total_commission_xlm = developer_commission_xlm + platform_commission_xlm
+            # Toplam komisyonu hesapla
+            total_commission_xlm = taxable_profit_xlm * (total_commission_rate / 100)
+            
+            # Platform developer'ın payından alıyor
+            platform_commission_xlm = total_commission_xlm * (platform_cut_percent / 100)
+            developer_commission_xlm = total_commission_xlm - platform_commission_xlm
             
             if total_commission_xlm > bot_session['commission_balance']:
                 # Oran koruyarak düşür
                 ratio = bot_session['commission_balance'] / total_commission_xlm
                 taxable_profit_xlm *= ratio
                 total_commission_xlm = bot_session['commission_balance']
-                developer_commission_xlm = total_commission_xlm * (developer_rate / total_rate)
-                platform_commission_xlm = total_commission_xlm * (platform_rate / total_rate)
+                platform_commission_xlm = total_commission_xlm * (platform_cut_percent / 100)
+                developer_commission_xlm = total_commission_xlm - platform_commission_xlm
             
             bot_session['high_water_mark'] = new_balance
             
