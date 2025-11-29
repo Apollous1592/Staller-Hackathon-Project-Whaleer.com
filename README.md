@@ -237,7 +237,7 @@ Features:
 
 ---
 
-## 🛠 8. Installation & Running
+## 8. Installation & Running
 
 ### Prerequisites
 - Node.js v18+
