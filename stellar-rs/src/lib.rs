@@ -6,27 +6,31 @@ use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol, to
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    Admin,                  // Whaleer Backend Adresi (Yönetici)
-    Vault(u64, Address),    // (BotID, UserAddress) -> VaultObj
+    Admin,                  
+    Vault(u64, u64),        // (BotID, UserID) -> VaultObj
 }
 
 #[contracttype]
 #[derive(Clone)]
 pub struct VaultObj {
-    pub developer: Address,    // Botu yapan kişi
-    pub platform: Address,     // Whaleer cüzdanı
-    pub asset: Address,        // Kullanılan Token (XLM/USDC)
-    pub profit_share_bps: u32, // Geliştirici Payı (Örn: 2000 = %20)
-    pub platform_cut_bps: u32, // Platform Payı (Örn: 1000 = %10)
-    pub balance: i128,         // Kasadaki Bakiye
-    pub is_active: bool,       // Aktif mi?
+    pub user_address: Address, // Değiştirilebilir
+    pub developer: Address,    // Değiştirilebilir
+    pub platform: Address,     
+    pub asset: Address,        
+    pub profit_share_bps: u32, 
+    pub platform_cut_bps: u32, 
+    pub balance: i128,         
+    pub is_active: bool,       
 }
 
 // --- OLAYLAR (EVENTS) ---
 const EVT_DEPOSIT: Symbol = symbol_short!("deposit");
 const EVT_WITHDRAW: Symbol = symbol_short!("withdraw");
 const EVT_SETTLED: Symbol = symbol_short!("settled");
-const EVT_INSUFF: Symbol = symbol_short!("insuff"); // Yetersiz Bakiye
+const EVT_INSUFF: Symbol = symbol_short!("insuff"); 
+// YENİ EVENTLER
+const EVT_UPD_USER: Symbol = symbol_short!("upd_user");
+const EVT_UPD_DEV: Symbol = symbol_short!("upd_dev");
 
 #[contract]
 pub struct ProfitSharingVault;
@@ -34,7 +38,7 @@ pub struct ProfitSharingVault;
 #[contractimpl]
 impl ProfitSharingVault {
 
-    // 1. INIT: Kontratı başlatır ve Yöneticiyi (Backend) atar.
+    // 1. INIT
     pub fn init(env: Env, admin: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("Already initialized");
@@ -42,11 +46,12 @@ impl ProfitSharingVault {
         env.storage().instance().set(&DataKey::Admin, &admin);
     }
 
-    // 2. INIT_VAULT: Yeni bir kasa oluşturur. (Sadece Admin çağırabilir)
+    // 2. INIT_VAULT
     pub fn init_vault(
         env: Env,
         bot_id: u64,
-        user: Address,
+        user_id: u64,          
+        user_address: Address, 
         developer: Address,
         platform: Address,
         asset: Address,
@@ -54,24 +59,19 @@ impl ProfitSharingVault {
         platform_cut_bps: u32
     ) {
         let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("Not initialized");
-        admin.require_auth(); // Admin imzası şart
+        admin.require_auth(); 
 
-        // BPS Validasyonu (0 - 10,000 arası olmalı)
-        if profit_share_bps > 10_000 {
-            panic!("Invalid profit_share_bps: max 10000");
-        }
-        if platform_cut_bps > 10_000 {
-            panic!("Invalid platform_cut_bps: max 10000");
-        }
+        if profit_share_bps > 10_000 { panic!("Invalid profit_share_bps"); }
+        if platform_cut_bps > 10_000 { panic!("Invalid platform_cut_bps"); }
 
-        let key = DataKey::Vault(bot_id, user.clone());
+        let key = DataKey::Vault(bot_id, user_id);
         
-        // Overwrite koruması
         if env.storage().persistent().has(&key) {
-            panic!("Vault already exists for this bot and user");
+            panic!("Vault already exists");
         }
         
         let new_vault = VaultObj {
+            user_address, 
             developer,
             platform,
             asset,
@@ -84,114 +84,122 @@ impl ProfitSharingVault {
         env.storage().persistent().set(&key, &new_vault);
     }
 
-    // 3. DEPOSIT: Kullanıcı kasaya para yükler.
-    pub fn deposit(env: Env, bot_id: u64, user: Address, amount: i128) {
-        user.require_auth(); // Kullanıcı onayı şart
-        
+    // 3. DEPOSIT
+    pub fn deposit(env: Env, bot_id: u64, user_id: u64, amount: i128) {
         if amount <= 0 { panic!("Amount must be positive"); }
 
-        let key = DataKey::Vault(bot_id, user.clone());
+        let key = DataKey::Vault(bot_id, user_id);
         let mut vault: VaultObj = env.storage().persistent().get(&key).expect("Vault not found");
 
-        // Kullanıcıdan Kontrata Transfer
-        let client = token::Client::new(&env, &vault.asset);
-        client.transfer(&user, &env.current_contract_address(), &amount);
+        // İmzalayan kişi, ŞU ANKİ kayıtlı cüzdan olmalı
+        vault.user_address.require_auth();
 
-        // Bakiyeyi güncelle
+        let client = token::Client::new(&env, &vault.asset);
+        client.transfer(&vault.user_address, &env.current_contract_address(), &amount);
+
         vault.balance += amount;
-        
-        // ÖNEMLİ: Para yüklenince pasif olan vault tekrar aktif olur!
         vault.is_active = true; 
         
         env.storage().persistent().set(&key, &vault);
 
-        env.events().publish((EVT_DEPOSIT, user), (bot_id, amount));
+        env.events().publish((EVT_DEPOSIT, user_id), (bot_id, amount));
     }
 
-    // 4. WITHDRAW: Kullanıcı parasını geri çeker.
-    pub fn withdraw(env: Env, bot_id: u64, user: Address, amount: i128) {
-        user.require_auth();
-
+    // 4. WITHDRAW
+    pub fn withdraw(env: Env, bot_id: u64, user_id: u64, amount: i128) {
         if amount <= 0 { panic!("Amount must be positive"); }
 
-        let key = DataKey::Vault(bot_id, user.clone());
+        let key = DataKey::Vault(bot_id, user_id);
         let mut vault: VaultObj = env.storage().persistent().get(&key).expect("Vault not found");
+
+        vault.user_address.require_auth();
 
         if amount > vault.balance {
             panic!("Insufficient vault balance");
         }
 
-        // Kontrattan Kullanıcıya Transfer
         let client = token::Client::new(&env, &vault.asset);
-        client.transfer(&env.current_contract_address(), &user, &amount);
+        client.transfer(&env.current_contract_address(), &vault.user_address, &amount);
 
         vault.balance -= amount;
         env.storage().persistent().set(&key, &vault);
 
-        env.events().publish((EVT_WITHDRAW, user), (bot_id, amount));
+        env.events().publish((EVT_WITHDRAW, user_id), (bot_id, amount));
     }
 
-    // 5. SETTLE_PROFIT: Kâr dağıtımı (Sadece Admin/Backend çağırır)
-    pub fn settle_profit(env: Env, bot_id: u64, user: Address, profit_amount: i128) {
+    // 5. SETTLE_PROFIT
+    pub fn settle_profit(env: Env, bot_id: u64, user_id: u64, profit_amount: i128) {
         let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("Not initialized");
-        admin.require_auth(); // Backend imzası şart
+        admin.require_auth(); 
 
         if profit_amount <= 0 { panic!("Profit amount must be positive"); }
 
-        let key = DataKey::Vault(bot_id, user.clone());
+        let key = DataKey::Vault(bot_id, user_id);
         let mut vault: VaultObj = env.storage().persistent().get(&key).expect("Vault not found");
 
-        // Eğer vault zaten pasifse işlem yapma ve çık
-        if !vault.is_active { 
-            return; 
-        }
+        if !vault.is_active { return; }
 
-        // --- HESAPLAMA ---
         let total_commission = (profit_amount * vault.profit_share_bps as i128) / 10_000;
 
-        // Bakiye Kontrolü
         if vault.balance < total_commission {
-            // Yetersiz Bakiye Eventi
-            env.events().publish((EVT_INSUFF, user.clone()), (bot_id, total_commission, vault.balance));
+            env.events().publish((EVT_INSUFF, user_id), (bot_id, total_commission, vault.balance));
             
-            // --- GÜNCELLEME BURADA ---
-            // Vault'u pasife çekiyoruz. 
-            // Kullanıcı tekrar 'deposit' yapana kadar bu vault kilitli kalacak.
             vault.is_active = false;
             env.storage().persistent().set(&key, &vault);
-            
             return;
         }
 
-        // Platform Payı
         let platform_fee = (total_commission * vault.platform_cut_bps as i128) / 10_000;
         let dev_fee = total_commission - platform_fee;
 
-        // --- TRANSFERLER ---
         let client = token::Client::new(&env, &vault.asset);
 
-        // Platforma öde
         if platform_fee > 0 {
             client.transfer(&env.current_contract_address(), &vault.platform, &platform_fee);
         }
 
-        // Geliştiriciye öde
         if dev_fee > 0 {
             client.transfer(&env.current_contract_address(), &vault.developer, &dev_fee);
         }
 
-        // Bakiyeyi düş ve kaydet
         vault.balance -= total_commission;
-        
-        // İşlem başarılı, aktif kalmaya devam ediyor
         env.storage().persistent().set(&key, &vault);
 
-        env.events().publish((EVT_SETTLED, user), (bot_id, profit_amount, total_commission));
+        env.events().publish((EVT_SETTLED, user_id), (bot_id, profit_amount, total_commission));
     }
 
-    // 6. GET_VAULT: View Fonksiyonu
-    pub fn get_vault(env: Env, bot_id: u64, user: Address) -> VaultObj {
-        let key = DataKey::Vault(bot_id, user.clone());
+    // 6. GET_VAULT
+    pub fn get_vault(env: Env, bot_id: u64, user_id: u64) -> VaultObj {
+        let key = DataKey::Vault(bot_id, user_id);
         env.storage().persistent().get(&key).expect("Vault not found")
+    }
+
+    // 7. UPDATE_USER_ADDRESS: Kullanıcı cüzdanını değiştirir
+    pub fn update_user_address(env: Env, bot_id: u64, user_id: u64, new_address: Address) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("Not initialized");
+        admin.require_auth(); // Sadece Admin değiştirebilir (DB Sync için)
+
+        let key = DataKey::Vault(bot_id, user_id);
+        let mut vault: VaultObj = env.storage().persistent().get(&key).expect("Vault not found");
+
+        vault.user_address = new_address.clone();
+        env.storage().persistent().set(&key, &vault);
+
+        // Event: (Topic: upd_user, Data: new_address)
+        env.events().publish((EVT_UPD_USER, user_id), (bot_id, new_address));
+    }
+
+    // 8. UPDATE_DEVELOPER_ADDRESS: Geliştirici cüzdanını değiştirir
+    pub fn update_developer_address(env: Env, bot_id: u64, user_id: u64, new_address: Address) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("Not initialized");
+        admin.require_auth(); // Sadece Admin değiştirebilir
+
+        let key = DataKey::Vault(bot_id, user_id);
+        let mut vault: VaultObj = env.storage().persistent().get(&key).expect("Vault not found");
+
+        vault.developer = new_address.clone();
+        env.storage().persistent().set(&key, &vault);
+
+        env.events().publish((EVT_UPD_DEV, user_id), (bot_id, new_address));
     }
 }

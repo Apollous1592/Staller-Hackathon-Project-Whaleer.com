@@ -8,9 +8,15 @@ interface Bot {
   name: string;
   strategy: string;
   commission_rate: number;
+  developer_rate: number;
+  platform_rate: number;
+  total_commission: number;
   min_commission_deposit: number;
   deposit_address: string;
   whale_address: string;
+  developer: string;
+  platform: string;
+  contract_id: string;
 }
 
 interface DailyRecord {
@@ -18,6 +24,8 @@ interface DailyRecord {
   performance_percent: number;
   profit_usd: number;
   commission_xlm: number;
+  developer_xlm?: number;
+  platform_xlm?: number;
   simulation_balance: number;
   commission_balance: number;
   high_water_mark?: number;  // HWM at that point
@@ -269,15 +277,17 @@ export default function Home() {
           user_public_key: wallet.publicKey,
           amount: depositAmount,
           is_topup: false,
+          is_contract: data.is_contract || false,
         }),
       });
       
       const submitData = await submitRes.json();
       
       if (submitData.success) {
+        const contractText = submitData.is_contract ? ' (via Smart Contract)' : '';
         setMessage({ 
           type: 'success', 
-          text: `${depositAmount} XLM commission deposited! $1000 simulation started.` 
+          text: `${depositAmount} XLM commission deposited${contractText}! $1000 simulation started.` 
         });
         setShowDepositModal(false);
         fetchUserStatus();
@@ -371,6 +381,79 @@ export default function Home() {
     }
   };
 
+  // Contract Deposit - deposits directly to smart contract
+  const handleContractDeposit = async (botId: string, amount: number) => {
+    if (!wallet.publicKey || !freighterInstalled) return;
+    
+    setActionLoading(`contract-deposit-${botId}`);
+    setMessage(null);
+    
+    try {
+      // Step 1: Create contract deposit XDR
+      const res = await fetch('/api/contract/create-deposit-tx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bot_id: botId,
+          user_public_key: wallet.publicKey,
+          amount: amount,
+        }),
+      });
+      
+      const data = await res.json();
+      
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to create contract transaction');
+      }
+      
+      setMessage({ type: 'info', text: '🔗 Please sign the CONTRACT transaction in Freighter...' });
+      
+      // Step 2: Sign with Freighter
+      const signResult = await signTransaction(data.xdr, {
+        networkPassphrase: NETWORK_PASSPHRASE,
+      });
+      
+      if (signResult.error) {
+        throw new Error(signResult.error);
+      }
+      
+      // Step 3: Submit signed transaction
+      const submitRes = await fetch('/api/contract/submit-deposit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          signed_xdr: signResult.signedTxXdr,
+          bot_id: botId,
+          user_public_key: wallet.publicKey,
+          amount: amount,
+        }),
+      });
+      
+      const submitData = await submitRes.json();
+      
+      if (submitData.success) {
+        setMessage({ 
+          type: 'success', 
+          text: `🔗 Contract deposit successful! ${amount} XLM deposited to smart contract` 
+        });
+        fetchUserStatus();
+        checkAccountBalance();
+      } else {
+        throw new Error(submitData.error || 'Contract deposit failed');
+      }
+      
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Contract deposit failed';
+      if (errorMessage.includes('User declined')) {
+        setMessage({ type: 'warning', text: 'Transaction cancelled' });
+      } else {
+        setMessage({ type: 'error', text: errorMessage });
+      }
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const handleSimulateDay = async (botId: string) => {
     if (!wallet.publicKey) return;
     
@@ -454,6 +537,7 @@ export default function Home() {
     setMessage(null);
     
     try {
+      // Step 1: Request withdraw from backend
       const res = await fetch('/api/withdraw', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -465,18 +549,72 @@ export default function Home() {
       
       const data = await res.json();
       
-      if (data.success) {
-        setMessage({ 
-          type: 'success', 
-          text: `${data.amount_withdrawn} XLM withdrawn to your wallet!` 
-        });
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to withdraw');
+      }
+      
+      // Check if withdraw was already processed (no signing needed)
+      if (data.needs_signing === false) {
+        // Backend already sent the XLM
+        if (data.amount_withdrawn > 0) {
+          setMessage({ 
+            type: 'success', 
+            text: `✅ ${data.amount_withdrawn} XLM withdrawn to your wallet!` 
+          });
+        } else {
+          setMessage({ type: 'info', text: 'No balance to withdraw' });
+        }
         fetchUserStatus();
         checkAccountBalance();
-      } else {
-        setMessage({ type: 'error', text: data.error || 'Withdrawal failed' });
+        return;
       }
-    } catch {
-      setMessage({ type: 'error', text: 'Withdrawal failed' });
+      
+      // If there's an XDR, we need to sign it (contract withdraw)
+      if (data.xdr && data.needs_signing) {
+        setMessage({ type: 'info', text: '🔗 Please sign the CONTRACT withdraw in Freighter...' });
+        
+        // Step 2: Sign with Freighter
+        const signResult = await signTransaction(data.xdr, {
+          networkPassphrase: NETWORK_PASSPHRASE,
+        });
+        
+        if (signResult.error) {
+          throw new Error(signResult.error);
+        }
+        
+        // Step 3: Submit signed transaction
+        const submitRes = await fetch('/api/submit-withdraw', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            signed_xdr: signResult.signedTxXdr,
+            bot_id: botId,
+            user_public_key: wallet.publicKey,
+          }),
+        });
+        
+        const submitData = await submitRes.json();
+        
+        if (submitData.success) {
+          setMessage({ 
+            type: 'success', 
+            text: `🔗 ${submitData.amount_withdrawn} XLM withdrawn from contract to your wallet!` 
+          });
+        } else {
+          throw new Error(submitData.error || 'Withdraw submission failed');
+        }
+      }
+      
+      fetchUserStatus();
+      checkAccountBalance();
+      
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Withdrawal failed';
+      if (errorMessage.includes('User declined')) {
+        setMessage({ type: 'warning', text: 'Transaction cancelled' });
+      } else {
+        setMessage({ type: 'error', text: errorMessage });
+      }
     } finally {
       setActionLoading(null);
     }
@@ -649,9 +787,17 @@ export default function Home() {
                 <p className="strategy">{bot.strategy}</p>
                 
                 <div className="details">
+                  <div className="detail-item" style={{ background: '#fef3c7', padding: '0.5rem', borderRadius: '6px' }}>
+                    <div className="detail-label">🧑‍💻 Developer Commission</div>
+                    <div className="detail-value" style={{ color: '#b45309', fontWeight: 'bold' }}>{bot.developer_rate || 30}% of profits</div>
+                  </div>
+                  <div className="detail-item" style={{ background: '#dbeafe', padding: '0.5rem', borderRadius: '6px' }}>
+                    <div className="detail-label">🏢 Platform Commission</div>
+                    <div className="detail-value" style={{ color: '#1d4ed8', fontWeight: 'bold' }}>{bot.platform_rate || 10}% of profits</div>
+                  </div>
                   <div className="detail-item">
-                    <div className="detail-label">Commission Rate</div>
-                    <div className="detail-value">{bot.commission_rate}% (of profits)</div>
+                    <div className="detail-label">📊 Total Commission</div>
+                    <div className="detail-value">{bot.total_commission || (bot.developer_rate + bot.platform_rate) || 40}% (from your deposit)</div>
                   </div>
                   <div className="detail-item">
                     <div className="detail-label">Min Commission Deposit</div>
@@ -771,26 +917,26 @@ export default function Home() {
                         borderRadius: '8px',
                         marginTop: '0.5rem'
                       }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.7rem' }}>
                           <thead style={{ position: 'sticky', top: 0, background: '#f3f4f6' }}>
                             <tr>
-                              <th style={{ padding: '0.5rem', textAlign: 'left', borderBottom: '2px solid #e5e7eb' }}>Day</th>
-                              <th style={{ padding: '0.5rem', textAlign: 'right', borderBottom: '2px solid #e5e7eb' }}>%</th>
-                              <th style={{ padding: '0.5rem', textAlign: 'right', borderBottom: '2px solid #e5e7eb' }}>Profit ($)</th>
-                              <th style={{ padding: '0.5rem', textAlign: 'right', borderBottom: '2px solid #e5e7eb' }}>Commission (XLM)</th>
-                              <th style={{ padding: '0.5rem', textAlign: 'right', borderBottom: '2px solid #e5e7eb' }}>Sim. Balance</th>
-                              <th style={{ padding: '0.5rem', textAlign: 'right', borderBottom: '2px solid #e5e7eb' }}>HWM ($)</th>
-                              <th style={{ padding: '0.5rem', textAlign: 'right', borderBottom: '2px solid #e5e7eb' }}>Com. Balance</th>
+                              <th style={{ padding: '0.4rem', textAlign: 'left', borderBottom: '2px solid #e5e7eb' }}>Day</th>
+                              <th style={{ padding: '0.4rem', textAlign: 'right', borderBottom: '2px solid #e5e7eb' }}>%</th>
+                              <th style={{ padding: '0.4rem', textAlign: 'right', borderBottom: '2px solid #e5e7eb' }}>Profit</th>
+                              <th style={{ padding: '0.4rem', textAlign: 'right', borderBottom: '2px solid #e5e7eb', background: '#fef3c7' }}>🧑‍💻 Dev</th>
+                              <th style={{ padding: '0.4rem', textAlign: 'right', borderBottom: '2px solid #e5e7eb', background: '#dbeafe' }}>🏢 Platform</th>
+                              <th style={{ padding: '0.4rem', textAlign: 'right', borderBottom: '2px solid #e5e7eb' }}>Total</th>
+                              <th style={{ padding: '0.4rem', textAlign: 'right', borderBottom: '2px solid #e5e7eb' }}>Balance</th>
                             </tr>
                           </thead>
                           <tbody>
                             {activeBotInfo.daily_history.map((day) => (
                               <tr key={day.day} style={{ borderBottom: '1px solid #e5e7eb' }}>
-                                <td style={{ padding: '0.4rem 0.5rem', fontWeight: 'bold' }}>
-                                  {day.day === 0 ? '🏁' : `📅 ${day.day}`}
+                                <td style={{ padding: '0.3rem', fontWeight: 'bold' }}>
+                                  {day.day === 0 ? '🏁' : day.day}
                                 </td>
                                 <td style={{ 
-                                  padding: '0.4rem 0.5rem', 
+                                  padding: '0.3rem', 
                                   textAlign: 'right',
                                   color: day.performance_percent >= 0 ? '#10b981' : '#ef4444',
                                   fontWeight: 'bold'
@@ -798,57 +944,68 @@ export default function Home() {
                                   {day.day === 0 ? '-' : `${day.performance_percent >= 0 ? '+' : ''}${day.performance_percent}%`}
                                 </td>
                                 <td style={{ 
-                                  padding: '0.4rem 0.5rem', 
+                                  padding: '0.3rem', 
                                   textAlign: 'right',
                                   color: day.profit_usd >= 0 ? '#10b981' : '#ef4444'
                                 }}>
-                                  {day.day === 0 ? '-' : `${day.profit_usd >= 0 ? '+' : ''}$${day.profit_usd.toFixed(2)}`}
+                                  {day.day === 0 ? '-' : `$${day.profit_usd.toFixed(0)}`}
                                 </td>
                                 <td style={{ 
-                                  padding: '0.4rem 0.5rem', 
+                                  padding: '0.3rem', 
                                   textAlign: 'right',
-                                  color: '#f59e0b'
+                                  color: '#b45309',
+                                  background: '#fffbeb'
+                                }}>
+                                  {day.day === 0 ? '-' : (day.developer_xlm?.toFixed(4) || '0')}
+                                </td>
+                                <td style={{ 
+                                  padding: '0.3rem', 
+                                  textAlign: 'right',
+                                  color: '#1d4ed8',
+                                  background: '#eff6ff'
+                                }}>
+                                  {day.day === 0 ? '-' : (day.platform_xlm?.toFixed(4) || '0')}
+                                </td>
+                                <td style={{ 
+                                  padding: '0.3rem', 
+                                  textAlign: 'right',
+                                  color: '#f59e0b',
+                                  fontWeight: 'bold'
                                 }}>
                                   {day.day === 0 ? '-' : day.commission_xlm.toFixed(4)}
                                 </td>
-                                <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: '#7c3aed' }}>
-                                  ${day.simulation_balance.toFixed(2)}
-                                </td>
-                                <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: '#6366f1' }}>
-                                  ${(day.high_water_mark ?? day.simulation_balance).toFixed(2)}
-                                </td>
                                 <td style={{ 
-                                  padding: '0.4rem 0.5rem', 
+                                  padding: '0.3rem', 
                                   textAlign: 'right',
                                   color: day.commission_balance > 0 ? '#059669' : '#dc2626',
                                   fontWeight: 'bold'
                                 }}>
-                                  {day.commission_balance.toFixed(4)}
+                                  {day.commission_balance.toFixed(2)}
                                 </td>
                               </tr>
                             ))}
                           </tbody>
-                          <tfoot style={{ background: '#f9fafb', fontWeight: 'bold' }}>
+                          <tfoot style={{ background: '#f9fafb', fontWeight: 'bold', fontSize: '0.75rem' }}>
                             <tr>
-                              <td colSpan={2} style={{ padding: '0.5rem', textAlign: 'left' }}>TOTAL</td>
+                              <td colSpan={2} style={{ padding: '0.4rem', textAlign: 'left' }}>TOPLAM</td>
                               <td style={{ 
-                                padding: '0.5rem', 
+                                padding: '0.4rem', 
                                 textAlign: 'right',
                                 color: activeBotInfo.total_profit >= 0 ? '#10b981' : '#ef4444'
                               }}>
-                                {activeBotInfo.total_profit >= 0 ? '+' : ''}${activeBotInfo.total_profit.toFixed(2)}
+                                ${activeBotInfo.total_profit.toFixed(0)}
                               </td>
-                              <td style={{ padding: '0.5rem', textAlign: 'right', color: '#f59e0b' }}>
+                              <td style={{ padding: '0.4rem', textAlign: 'right', color: '#b45309', background: '#fffbeb' }}>
+                                {activeBotInfo.daily_history.reduce((sum, d) => sum + (d.developer_xlm || 0), 0).toFixed(4)}
+                              </td>
+                              <td style={{ padding: '0.4rem', textAlign: 'right', color: '#1d4ed8', background: '#eff6ff' }}>
+                                {activeBotInfo.daily_history.reduce((sum, d) => sum + (d.platform_xlm || 0), 0).toFixed(4)}
+                              </td>
+                              <td style={{ padding: '0.4rem', textAlign: 'right', color: '#f59e0b' }}>
                                 {activeBotInfo.total_commission_paid.toFixed(4)}
                               </td>
-                              <td style={{ padding: '0.5rem', textAlign: 'right', color: '#7c3aed' }}>
-                                ${activeBotInfo.simulation_balance.toFixed(2)}
-                              </td>
-                              <td style={{ padding: '0.5rem', textAlign: 'right', color: '#6366f1' }}>
-                                ${activeBotInfo.high_water_mark?.toFixed(2) ?? activeBotInfo.simulation_balance.toFixed(2)}
-                              </td>
-                              <td style={{ padding: '0.5rem', textAlign: 'right', color: '#059669' }}>
-                                {activeBotInfo.commission_balance.toFixed(4)}
+                              <td style={{ padding: '0.4rem', textAlign: 'right', color: '#059669' }}>
+                                {activeBotInfo.commission_balance.toFixed(2)}
                               </td>
                             </tr>
                           </tfoot>

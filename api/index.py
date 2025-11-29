@@ -1,152 +1,101 @@
 """
 Profit Sharing App - Python Backend
 Flask API server with Stellar testnet integration
-Commission-based access with separate trading simulation
+Soroban Smart Contract for automated commission distribution
+Demo for Whaleer.com profit-sharing system
 """
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from stellar_sdk import Keypair, Server, TransactionBuilder, Network, Asset
+from stellar_sdk import SorobanServer, scval
+from stellar_sdk.soroban_rpc import GetTransactionStatus
 from stellar_sdk.exceptions import NotFoundError, BadRequestError
-import requests
-import json
-import os
+from decimal import Decimal
 import random
-from datetime import datetime
+import time
 
 app = Flask(__name__)
 CORS(app)
 
 # Stellar Testnet Configuration
 HORIZON_URL = "https://horizon-testnet.stellar.org"
+SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org"
 NETWORK_PASSPHRASE = Network.TESTNET_NETWORK_PASSPHRASE
-FRIENDBOT_URL = "https://friendbot.stellar.org"
 
-# Initialize Stellar server
+# Initialize Stellar servers
 server = Server(horizon_url=HORIZON_URL)
+soroban_server = SorobanServer(SOROBAN_RPC_URL)
 
-# File to persist vault keys
-VAULT_KEYS_FILE = "vault_keys.json"
+# ============== SOROBAN CONTRACT CONFIG ==============
+# Developer wallet that receives profit commissions
+DEVELOPER_PUBLIC_KEY = "GARPOAGOQSJEN3ODZSDZZT63PLDXDP6QN5PVHY3CD4JMITGUMQPR2MGH"
+
+# Platform/Admin wallet (for platform cut and signing init_vault)
+PLATFORM_PUBLIC_KEY = "GCF6SYQVT6F6AGOGAKKD4FYN7VEZI736B5F6GIKAE5CNWH2U4JJMFWOA"
+PLATFORM_SECRET_KEY = "SBJRCGYNBNMXHDZHIK4JWZUSUFKGLNZMVVGWWRNKTLQDL4DBEWBKXG62"
+
+# Smart Contract ID (deployed on Stellar Testnet)
+CONTRACT_ID = "CBEZLTP6IW3KETVKHHQIZP6MV4N5ROD3O2YMXE3WPDBHWYO53UBDJDFI"
+
+# Native XLM Asset ID on Soroban
+NATIVE_ASSET_ID = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
 
 # In-memory storage
 user_sessions = {}
 
-# Pre-configured trading bots
+# Trading Bots - Her bot için developer adresi ve komisyon oranları
+# developer_rate: Kârın yüzde kaçı developer'a gidecek
+# platform_rate: Kârın yüzde kaçı platform'a gidecek
+# Contract'a gönderilecek değerler hesaplanır (profit_share_bps, platform_cut_bps)
 TRADING_BOTS = [
     {
         "id": "bot-alpha",
         "name": "Bot Alpha",
         "strategy": "Trend Following - EMA crossovers",
-        "commission_rate": 10,  # 10% of profits
-        "min_commission_deposit": 10,  # Minimum XLM to deposit
-        "deposit_address": "",
-        "whale_address": "",
-        "vault_secret": "",
-        "whale_secret": "",
+        "developer_rate": 30,  # Kârın %30'u developer'a
+        "platform_rate": 10,   # Kârın %10'u platform'a
+        # Toplam: %40 komisyon
+        "min_commission_deposit": 10,
+        "developer": DEVELOPER_PUBLIC_KEY,
+        "platform": PLATFORM_PUBLIC_KEY,
     },
     {
         "id": "bot-beta",
         "name": "Bot Beta", 
         "strategy": "Arbitrage - Cross-exchange",
-        "commission_rate": 12,
+        "developer_rate": 25,  # Kârın %25'i developer'a
+        "platform_rate": 10,   # Kârın %10'u platform'a
+        # Toplam: %35 komisyon
         "min_commission_deposit": 5,
-        "deposit_address": "",
-        "whale_address": "",
-        "vault_secret": "",
-        "whale_secret": "",
+        "developer": DEVELOPER_PUBLIC_KEY,
+        "platform": PLATFORM_PUBLIC_KEY,
     },
     {
         "id": "bot-gamma",
         "name": "Bot Gamma",
         "strategy": "DCA - Smart timing",
-        "commission_rate": 8,
+        "developer_rate": 20,  # Kârın %20'si developer'a
+        "platform_rate": 10,   # Kârın %10'u platform'a
+        # Toplam: %30 komisyon
         "min_commission_deposit": 5,
-        "deposit_address": "",
-        "whale_address": "",
-        "vault_secret": "",
-        "whale_secret": "",
+        "developer": DEVELOPER_PUBLIC_KEY,
+        "platform": PLATFORM_PUBLIC_KEY,
     },
 ]
 
-# Starting simulation balance for each user
+# Starting simulation balance
 STARTING_SIMULATION_BALANCE = 1000.0  # $1000 virtual money
 
-def save_vault_keys():
-    """Save vault keys to file for persistence"""
-    keys_data = {}
-    for bot in TRADING_BOTS:
-        keys_data[bot['id']] = {
-            "deposit_address": bot['deposit_address'],
-            "whale_address": bot['whale_address'],
-            "vault_secret": bot['vault_secret'],
-            "whale_secret": bot['whale_secret']
-        }
-    
-    with open(VAULT_KEYS_FILE, 'w') as f:
-        json.dump(keys_data, f, indent=2)
-    print(f"[VAULT] Keys saved to {VAULT_KEYS_FILE}")
+# ============== HELPER FUNCTIONS ==============
 
-def load_vault_keys():
-    """Load vault keys from file if exists"""
-    if not os.path.exists(VAULT_KEYS_FILE):
-        return False
-    
-    try:
-        with open(VAULT_KEYS_FILE, 'r') as f:
-            keys_data = json.load(f)
-        
-        for bot in TRADING_BOTS:
-            if bot['id'] in keys_data:
-                bot['deposit_address'] = keys_data[bot['id']]['deposit_address']
-                bot['whale_address'] = keys_data[bot['id']]['whale_address']
-                bot['vault_secret'] = keys_data[bot['id']]['vault_secret']
-                bot['whale_secret'] = keys_data[bot['id']].get('whale_secret', '')
-        
-        print(f"[VAULT] Keys loaded from {VAULT_KEYS_FILE}")
-        return True
-    except Exception as e:
-        print(f"[VAULT] Error loading keys: {e}")
-        return False
+def get_bot_index(bot_id: str) -> int:
+    """Get bot index from bot_id string"""
+    return next((i for i, b in enumerate(TRADING_BOTS) if b['id'] == bot_id), 0)
 
-def initialize_bot_accounts():
-    """Initialize Stellar accounts for each trading bot's vault"""
-    
-    if load_vault_keys():
-        print("[VAULT] Using existing vault accounts:")
-        for bot in TRADING_BOTS:
-            print(f"  {bot['name']}: {bot['deposit_address'][:20]}...")
-        return
-    
-    print("[VAULT] Creating new vault accounts...")
-    
-    for bot in TRADING_BOTS:
-        # Generate vault keypair
-        vault_keypair = Keypair.random()
-        bot['deposit_address'] = vault_keypair.public_key
-        bot['vault_secret'] = vault_keypair.secret
-        
-        # Generate whale keypair
-        whale_keypair = Keypair.random()
-        bot['whale_address'] = whale_keypair.public_key
-        bot['whale_secret'] = whale_keypair.secret
-        
-        print(f"\n[{bot['name']}]")
-        print(f"  Vault: {bot['deposit_address'][:24]}...")
-        print(f"  Whale: {bot['whale_address'][:24]}...")
-        
-        # Fund accounts via friendbot
-        try:
-            response = requests.get(f"{FRIENDBOT_URL}?addr={bot['deposit_address']}")
-            if response.status_code == 200:
-                print(f"  ✓ Vault funded")
-            
-            response = requests.get(f"{FRIENDBOT_URL}?addr={bot['whale_address']}")
-            if response.status_code == 200:
-                print(f"  ✓ Whale funded")
-        except Exception as e:
-            print(f"  ✗ Funding error: {e}")
-    
-    save_vault_keys()
+def get_user_hash(user_public_key: str) -> int:
+    """Create a consistent user ID from public key"""
+    return hash(user_public_key) % 1000000
 
 def get_user_session(user_public_key):
     """Get or create user session"""
@@ -161,70 +110,373 @@ def generate_daily_performance():
     """Generate random daily performance between -3% and +5%"""
     return round(random.uniform(-3.0, 5.0), 2)
 
-# ============== DEBUG ENDPOINTS ==============
-
-@app.route('/debug/vaults', methods=['GET'])
-def debug_vaults():
-    """Debug endpoint to check vault balances"""
-    vault_info = []
+def calculate_contract_rates(developer_rate: float, platform_rate: float):
+    """
+    İstenen developer ve platform oranlarından contract'a gönderilecek
+    profit_share_bps ve platform_cut_bps hesaplar.
     
-    for bot in TRADING_BOTS:
-        vault_balance = "0"
-        whale_balance = "0"
-        
-        try:
-            account = server.accounts().account_id(bot['deposit_address']).call()
-            vault_balance = next(
-                (b['balance'] for b in account.get('balances', []) if b['asset_type'] == 'native'),
-                '0'
-            )
-        except:
-            pass
-            
-        try:
-            account = server.accounts().account_id(bot['whale_address']).call()
-            whale_balance = next(
-                (b['balance'] for b in account.get('balances', []) if b['asset_type'] == 'native'),
-                '0'
-            )
-        except:
-            pass
-        
-        vault_info.append({
-            "bot_id": bot['id'],
-            "bot_name": bot['name'],
-            "vault_address": bot['deposit_address'],
-            "vault_balance": vault_balance,
-            "whale_address": bot['whale_address'],
-            "whale_balance": whale_balance,
-            "vault_explorer": f"https://stellar.expert/explorer/testnet/account/{bot['deposit_address']}",
-            "whale_explorer": f"https://stellar.expert/explorer/testnet/account/{bot['whale_address']}"
-        })
+    İstenen: developer=%30, platform=%10 → Toplam %40 komisyon
     
-    return jsonify({"success": True, "vaults": vault_info})
+    Contract mantığı:
+    - total_commission = profit * profit_share_bps / 10000
+    - platform_fee = total_commission * platform_cut_bps / 10000
+    - dev_fee = total_commission - platform_fee
+    
+    Çözüm:
+    - profit_share_bps = (developer + platform) * 100 = 4000
+    - platform_cut_bps = (platform / toplam) * 10000 = 2500
+    
+    Sonuç:
+    - total = profit * 40% = 40 XLM
+    - platform = 40 * 25% = 10 XLM ✅
+    - dev = 40 - 10 = 30 XLM ✅
+    """
+    total_rate = developer_rate + platform_rate
+    profit_share_bps = int(total_rate * 100)  # %40 → 4000
+    
+    if total_rate > 0:
+        platform_cut_bps = int((platform_rate / total_rate) * 10000)  # 10/40 * 10000 = 2500
+    else:
+        platform_cut_bps = 0
+    
+    return profit_share_bps, platform_cut_bps
 
-@app.route('/debug/sessions', methods=['GET'])
-def debug_sessions():
-    """Debug endpoint to see all user sessions"""
-    return jsonify({"success": True, "sessions": user_sessions})
+# ============== SOROBAN CONTRACT FUNCTIONS ==============
 
-# ============== MAIN API ENDPOINTS ==============
+def invoke_contract_with_simulation(function_name: str, params: list, signer_secret: str):
+    """
+    Arkadaşın init_vault.py'den adapte edildi.
+    Önce simülasyon yapar, hataları detaylı loglar, sonra gönderir.
+    """
+    try:
+        signer_keypair = Keypair.from_secret(signer_secret)
+        
+        # Horizon'dan sequence number al (arkadaşın yöntemi)
+        source_account = server.load_account(signer_keypair.public_key)
+        
+        tx = (
+            TransactionBuilder(
+                source_account=source_account,
+                network_passphrase=NETWORK_PASSPHRASE,
+                base_fee=100,  # Simülasyon sonrası artabilir
+            )
+            .set_timeout(30)
+            .append_invoke_contract_function_op(
+                contract_id=CONTRACT_ID,
+                function_name=function_name,
+                parameters=params,
+            )
+            .build()
+        )
+        
+        # Simülasyon yap (arkadaşın eklediği özellik)
+        print(f"⏳ Simülasyon yapılıyor: {function_name}...")
+        sim_resp = soroban_server.simulate_transaction(tx)
+        
+        # Simülasyon hata kontrolü
+        if hasattr(sim_resp, 'error') and sim_resp.error:
+            print(f"🔴 Simulation Error: {sim_resp.error}")
+            raise RuntimeError(f"Simülasyon Başarısız: {sim_resp.error}")
+        
+        print(f"✅ Simülasyon başarılı!")
+        
+        # Simülasyon verilerini işleme ekle
+        tx = soroban_server.prepare_transaction(tx, sim_resp)
+        
+        # İmzala
+        tx.sign(signer_keypair)
+        
+        # Gönder
+        print(f"🚀 İşlem ağa gönderiliyor: {function_name}...")
+        response = soroban_server.send_transaction(tx)
+        
+        if hasattr(response, 'status') and response.status == "ERROR":
+            raise RuntimeError(f"Transaction Failed: {response}")
+        
+        print(f"[CONTRACT] {function_name} submitted: {response.hash}")
+        
+        tx_hash = response.hash
+        for _ in range(30):
+            time.sleep(1)
+            result = soroban_server.get_transaction(tx_hash)
+            if result.status == GetTransactionStatus.SUCCESS:
+                print(f"✅ [CONTRACT] {function_name} SUCCESS!")
+                return result
+            elif result.status == GetTransactionStatus.FAILED:
+                print(f"❌ [CONTRACT] {function_name} FAILED")
+                return None
+        
+        return None
+        
+    except Exception as e:
+        print(f"🔴 [CONTRACT] Error in {function_name}: {e}")
+        return None
+
+
+def invoke_contract(function_name: str, params: list, signer_secret: str):
+    """Generic function to invoke Soroban smart contract methods (eski versiyon)"""
+    try:
+        signer_keypair = Keypair.from_secret(signer_secret)
+        source_account = soroban_server.load_account(signer_keypair.public_key)
+        
+        tx = (
+            TransactionBuilder(
+                source_account=source_account,
+                network_passphrase=NETWORK_PASSPHRASE,
+                base_fee=100000,
+            )
+            .append_invoke_contract_function_op(
+                contract_id=CONTRACT_ID,
+                function_name=function_name,
+                parameters=params,
+            )
+            .set_timeout(300)
+            .build()
+        )
+        
+        tx = soroban_server.prepare_transaction(tx)
+        tx.sign(signer_keypair)
+        response = soroban_server.send_transaction(tx)
+        
+        print(f"[CONTRACT] {function_name} submitted: {response.hash}")
+        
+        tx_hash = response.hash
+        for _ in range(30):
+            time.sleep(1)
+            result = soroban_server.get_transaction(tx_hash)
+            if result.status == GetTransactionStatus.SUCCESS:
+                print(f"[CONTRACT] {function_name} SUCCESS!")
+                return result
+            elif result.status == GetTransactionStatus.FAILED:
+                print(f"[CONTRACT] {function_name} FAILED")
+                return None
+        
+        return None
+        
+    except Exception as e:
+        print(f"[CONTRACT] Error in {function_name}: {e}")
+        return None
+
+
+def contract_init_vault(
+    bot_id: int,
+    user_id: int,
+    user_address: str,
+    developer_address: str,
+    developer_rate: float = 30,  # Kârın %30'u developer'a
+    platform_rate: float = 10,   # Kârın %10'u platform'a
+):
+    """
+    Soroban kontratındaki init_vault fonksiyonunu çağırır.
+    
+    İstenen davranış:
+    - 100 XLM kâr olduğunda:
+      - Developer: 30 XLM (%30)
+      - Platform: 10 XLM (%10)
+      - Toplam kesinti: 40 XLM (depozito'dan)
+    
+    Contract mantığı:
+    - total_commission = profit * profit_share_bps / 10000
+    - platform_fee = total_commission * platform_cut_bps / 10000
+    - dev_fee = total_commission - platform_fee
+    
+    Bu yüzden:
+    - profit_share_bps = (developer + platform) * 100 = 4000 (%40)
+    - platform_cut_bps = (platform / toplam) * 10000 = 2500 (%25 of total)
+    """
+    print(f"\n{'='*60}")
+    print("🔧 INIT VAULT - Soroban Contract Call")
+    print(f"{'='*60}")
+    print(f"Bot ID: {bot_id}")
+    print(f"User ID: {user_id}")
+    print(f"User Address: {user_address}")
+    print(f"Developer Address: {developer_address}")
+    print(f"Platform Address: {PLATFORM_PUBLIC_KEY}")
+    print(f"Developer Rate: {developer_rate}% of profit")
+    print(f"Platform Rate: {platform_rate}% of profit")
+    print(f"Total Commission: {developer_rate + platform_rate}% of profit")
+    
+    # Contract'a gönderilecek BPS değerlerini hesapla
+    profit_share_bps, platform_cut_bps = calculate_contract_rates(developer_rate, platform_rate)
+    
+    print(f"→ profit_share_bps: {profit_share_bps} (toplam komisyon oranı)")
+    print(f"→ platform_cut_bps: {platform_cut_bps} (platform'un toplam içindeki payı)")
+    
+    # Validation
+    if profit_share_bps < 0 or platform_cut_bps < 0:
+        raise ValueError("Oranlar negatif olamaz.")
+    if profit_share_bps > 10_000 or platform_cut_bps > 10_000:
+        raise ValueError("Oranlar %100 (10000 bps) üzerinde olamaz.")
+    
+    # fn init_vault(env, bot_id, user_id, user_address, developer, platform, asset, profit_share_bps, platform_cut_bps)
+    params = [
+        scval.to_uint64(bot_id),
+        scval.to_uint64(user_id),
+        scval.to_address(user_address),
+        scval.to_address(developer_address),     # developer - kar payı buraya
+        scval.to_address(PLATFORM_PUBLIC_KEY),   # platform - platform kesintisi buraya
+        scval.to_address(NATIVE_ASSET_ID),       # asset (XLM)
+        scval.to_uint32(profit_share_bps),       # toplam komisyon oranı
+        scval.to_uint32(platform_cut_bps),       # platform'un payı
+    ]
+    
+    return invoke_contract_with_simulation("init_vault", params, PLATFORM_SECRET_KEY)
+
+
+def contract_deposit(bot_id: int, user_id: int, amount_xlm: float, user_public_key: str):
+    """
+    Create contract deposit XDR for user to sign
+    Returns XDR that frontend will sign with Freighter
+    """
+    try:
+        amount_stroops = int(amount_xlm * 10_000_000)
+        
+        source_account = soroban_server.load_account(user_public_key)
+        
+        params = [
+            scval.to_uint64(bot_id),
+            scval.to_uint64(user_id),
+            scval.to_int128(amount_stroops),
+        ]
+        
+        tx = (
+            TransactionBuilder(
+                source_account=source_account,
+                network_passphrase=NETWORK_PASSPHRASE,
+                base_fee=100000,
+            )
+            .append_invoke_contract_function_op(
+                contract_id=CONTRACT_ID,
+                function_name="deposit",
+                parameters=params,
+            )
+            .set_timeout(300)
+            .build()
+        )
+        
+        tx = soroban_server.prepare_transaction(tx)
+        
+        print(f"[CONTRACT] Deposit XDR created: {amount_xlm} XLM")
+        return tx.to_xdr(), None
+        
+    except Exception as e:
+        print(f"[CONTRACT] Deposit XDR error: {e}")
+        return None, str(e)
+
+
+def contract_withdraw(bot_id: int, user_id: int, amount_xlm: float, user_public_key: str):
+    """Create contract withdraw XDR for user to sign"""
+    try:
+        amount_stroops = int(amount_xlm * 10_000_000)
+        
+        source_account = soroban_server.load_account(user_public_key)
+        
+        params = [
+            scval.to_uint64(bot_id),
+            scval.to_uint64(user_id),
+            scval.to_int128(amount_stroops),
+        ]
+        
+        tx = (
+            TransactionBuilder(
+                source_account=source_account,
+                network_passphrase=NETWORK_PASSPHRASE,
+                base_fee=100000,
+            )
+            .append_invoke_contract_function_op(
+                contract_id=CONTRACT_ID,
+                function_name="withdraw",
+                parameters=params,
+            )
+            .set_timeout(300)
+            .build()
+        )
+        
+        tx = soroban_server.prepare_transaction(tx)
+        
+        print(f"[CONTRACT] Withdraw XDR created: {amount_xlm} XLM")
+        return tx.to_xdr(), None
+        
+    except Exception as e:
+        print(f"[CONTRACT] Withdraw XDR error: {e}")
+        return None, str(e)
+
+
+def contract_settle_profit(bot_id: int, user_id: int, profit_xlm: float):
+    """
+    Settle profit - contract sends commission to developer and platform.
+    
+    Contract'taki hesaplama:
+    - total_commission = profit_amount * profit_share_bps / 10000
+    - platform_fee = total_commission * platform_cut_bps / 10000
+    - dev_fee = total_commission - platform_fee
+    
+    Örnek: profit=100 XLM, profit_share=30%, platform_cut=10%
+    - total_commission = 100 * 3000 / 10000 = 30 XLM
+    - platform_fee = 30 * 1000 / 10000 = 3 XLM
+    - dev_fee = 30 - 3 = 27 XLM
+    """
+    profit_stroops = int(profit_xlm * 10_000_000)
+    
+    if profit_stroops <= 0:
+        return None
+    
+    params = [
+        scval.to_uint64(bot_id),
+        scval.to_uint64(user_id),
+        scval.to_int128(profit_stroops),
+    ]
+    
+    print(f"[CONTRACT] Settling profit: {profit_xlm} XLM (profit amount, not commission)")
+    return invoke_contract("settle_profit", params, PLATFORM_SECRET_KEY)
+
+
+def submit_signed_tx(signed_xdr: str):
+    """Submit a signed Soroban transaction"""
+    try:
+        from stellar_sdk import TransactionEnvelope
+        
+        tx = TransactionEnvelope.from_xdr(signed_xdr, network_passphrase=NETWORK_PASSPHRASE)
+        response = soroban_server.send_transaction(tx)
+        
+        print(f"[CONTRACT] TX submitted: {response.hash}")
+        
+        tx_hash = response.hash
+        for _ in range(30):
+            time.sleep(1)
+            result = soroban_server.get_transaction(tx_hash)
+            if result.status == GetTransactionStatus.SUCCESS:
+                return {"success": True, "hash": tx_hash}
+            elif result.status == GetTransactionStatus.FAILED:
+                return {"success": False, "error": "Transaction failed"}
+        
+        return {"success": False, "error": "Timeout"}
+        
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ============== API ENDPOINTS ==============
 
 @app.route('/bots', methods=['GET'])
 def get_bots():
-    """Return list of available trading bots"""
+    """Return list of available trading bots with commission structure"""
     bots_public = []
     for bot in TRADING_BOTS:
         bots_public.append({
             "id": bot['id'],
             "name": bot['name'],
             "strategy": bot['strategy'],
-            "commission_rate": bot['commission_rate'],
+            "developer_rate": bot['developer_rate'],   # Kârın %X'i developer'a
+            "platform_rate": bot['platform_rate'],     # Kârın %X'i platform'a
+            "total_commission": bot['developer_rate'] + bot['platform_rate'],  # Toplam komisyon
             "min_commission_deposit": bot['min_commission_deposit'],
-            "deposit_address": bot['deposit_address'],
-            "whale_address": bot['whale_address']
+            "developer": bot['developer'],
+            "platform": bot['platform'],
+            "contract_id": CONTRACT_ID,
         })
     return jsonify({"success": True, "bots": bots_public})
+
 
 @app.route('/status', methods=['GET'])
 def get_status():
@@ -236,12 +488,10 @@ def get_status():
     
     session = get_user_session(public_key)
     
-    # Convert active_bots dict to list with status
     active_bots_list = []
     for bot_id, bot_data in session['active_bots'].items():
         bot_info = bot_data.copy()
         bot_info['bot_id'] = bot_id
-        # Check if bot is still accessible (has commission balance)
         bot_info['is_accessible'] = bot_data['commission_balance'] > 0
         active_bots_list.append(bot_info)
     
@@ -251,16 +501,17 @@ def get_status():
         "active_bots": active_bots_list
     })
 
+
 @app.route('/create-deposit-tx', methods=['POST'])
 def create_deposit_tx():
-    """Create a deposit transaction for Freighter to sign"""
+    """Create contract deposit transaction for Freighter to sign"""
     try:
         data = request.json
         bot_id = data.get('bot_id')
         user_public_key = data.get('user_public_key')
-        amount = data.get('amount', '10')
+        amount = float(data.get('amount', 10))
         
-        print(f"[CREATE-TX] bot={bot_id}, user={user_public_key[:16]}..., amount={amount}")
+        print(f"[DEPOSIT] Creating contract TX: bot={bot_id}, amount={amount} XLM")
         
         if not all([bot_id, user_public_key]):
             return jsonify({"success": False, "error": "Missing parameters"}), 400
@@ -269,128 +520,128 @@ def create_deposit_tx():
         if not bot:
             return jsonify({"success": False, "error": "Bot not found"}), 404
         
-        try:
-            source_account = server.load_account(user_public_key)
-        except NotFoundError:
-            return jsonify({
-                "success": False,
-                "error": "Account not found. Fund it at https://laboratory.stellar.org"
-            }), 400
+        bot_index = get_bot_index(bot_id)
+        user_hash = get_user_hash(user_public_key)
         
-        transaction = (
-            TransactionBuilder(
-                source_account=source_account,
-                network_passphrase=NETWORK_PASSPHRASE,
-                base_fee=100
+        # Bot'tan developer ve oranları al
+        developer_address = bot['developer']
+        developer_rate = bot['developer_rate']  # Kârın %30'u developer'a
+        platform_rate = bot['platform_rate']    # Kârın %10'u platform'a
+        
+        # Init vault if needed (ignore errors - might already exist)
+        try:
+            contract_init_vault(
+                bot_id=bot_index,
+                user_id=user_hash,
+                user_address=user_public_key,
+                developer_address=developer_address,
+                developer_rate=developer_rate,
+                platform_rate=platform_rate,
             )
-            .append_payment_op(
-                destination=bot['deposit_address'],
-                asset=Asset.native(),
-                amount=str(amount)
-            )
-            .set_timeout(300)
-            .build()
-        )
+        except Exception as e:
+            print(f"[INIT_VAULT] Muhtemelen zaten var: {e}")
+        
+        # Create contract deposit XDR
+        xdr, error = contract_deposit(bot_index, user_hash, amount, user_public_key)
+        
+        if error:
+            return jsonify({"success": False, "error": f"Contract error: {error}"}), 400
         
         return jsonify({
             "success": True,
-            "xdr": transaction.to_xdr(),
-            "network_passphrase": NETWORK_PASSPHRASE
+            "xdr": xdr,
+            "network_passphrase": NETWORK_PASSPHRASE,
+            "contract_id": CONTRACT_ID,
+            "developer": developer_address,
+            "platform": PLATFORM_PUBLIC_KEY,
+            "developer_rate": developer_rate,
+            "platform_rate": platform_rate,
+            "total_commission_rate": developer_rate + platform_rate,
         })
         
     except Exception as e:
-        print(f"[CREATE-TX] Error: {e}")
+        print(f"[DEPOSIT] Error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
 
 @app.route('/submit-transaction', methods=['POST'])
 def submit_transaction():
-    """Submit a signed transaction to Stellar"""
-    from stellar_sdk import TransactionEnvelope
-    
+    """Submit a signed contract transaction"""
     try:
         data = request.json
         signed_xdr = data.get('signed_xdr')
         bot_id = data.get('bot_id')
         user_public_key = data.get('user_public_key')
         amount = float(data.get('amount', 10))
-        is_topup = data.get('is_topup', False)
         
-        print(f"[SUBMIT-TX] bot={bot_id}, user={user_public_key[:16]}..., amount={amount}, topup={is_topup}")
+        print(f"[SUBMIT] bot={bot_id}, amount={amount} XLM")
         
         if not signed_xdr:
             return jsonify({"success": False, "error": "Missing signed_xdr"}), 400
         
-        response = server.submit_transaction(
-            TransactionEnvelope.from_xdr(signed_xdr, network_passphrase=NETWORK_PASSPHRASE)
-        )
+        result = submit_signed_tx(signed_xdr)
         
-        tx_hash = response.get('hash', '')
-        print(f"[SUBMIT-TX] SUCCESS! Hash: {tx_hash[:16]}...")
+        if not result['success']:
+            return jsonify({"success": False, "error": result.get('error')}), 400
         
-        # Initialize or update bot tracking
+        tx_hash = result.get('hash', '')
+        
+        # Update session
         if bot_id and user_public_key:
             session = get_user_session(user_public_key)
             
-            if is_topup and bot_id in session['active_bots']:
-                # Top-up existing subscription
+            if bot_id in session['active_bots']:
                 session['active_bots'][bot_id]['commission_balance'] += amount
                 session['active_bots'][bot_id]['total_deposited'] += amount
-                print(f"[SUBMIT-TX] Top-up: +{amount} XLM commission")
             else:
-                # New subscription
                 session['active_bots'][bot_id] = {
-                    # Commission tracking (real XLM)
-                    "commission_balance": amount,  # XLM available for commission payments
-                    "total_deposited": amount,     # Total XLM ever deposited
-                    "total_commission_paid": 0,    # Total XLM paid as commission
-                    
-                    # Trading simulation (virtual $)
-                    "simulation_balance": STARTING_SIMULATION_BALANCE,  # Virtual $ balance
+                    "commission_balance": amount,
+                    "total_deposited": amount,
+                    "total_commission_paid": 0,
+                    "simulation_balance": STARTING_SIMULATION_BALANCE,
                     "starting_balance": STARTING_SIMULATION_BALANCE,
-                    "total_profit": 0,             # Total $ profit/loss
-                    
-                    # High Water Mark - highest balance ever reached (for commission calc)
+                    "total_profit": 0,
                     "high_water_mark": STARTING_SIMULATION_BALANCE,
-                    
-                    # Day tracking
                     "current_day": 0,
-                    "daily_history": [
-                        {
-                            "day": 0,
-                            "performance_percent": 0,
-                            "profit_usd": 0,
-                            "commission_xlm": 0,
-                            "simulation_balance": STARTING_SIMULATION_BALANCE,
-                            "commission_balance": amount,
-                            "high_water_mark": STARTING_SIMULATION_BALANCE
-                        }
-                    ],
-                    
-                    # Status
+                    "daily_history": [{
+                        "day": 0,
+                        "performance_percent": 0,
+                        "profit_usd": 0,
+                        "commission_xlm": 0,
+                        "simulation_balance": STARTING_SIMULATION_BALANCE,
+                        "commission_balance": amount,
+                        "high_water_mark": STARTING_SIMULATION_BALANCE
+                    }],
                     "is_accessible": True,
-                    "deposit_tx": tx_hash
+                    "deposit_tx": tx_hash,
+                    "contract_id": CONTRACT_ID,
                 }
-                print(f"[SUBMIT-TX] New subscription: {amount} XLM, ${STARTING_SIMULATION_BALANCE} simulation")
         
         return jsonify({
             "success": True,
             "transaction_hash": tx_hash,
-            "explorer_url": f"https://stellar.expert/explorer/testnet/tx/{tx_hash}"
+            "explorer_url": f"https://stellar.expert/explorer/testnet/tx/{tx_hash}",
+            "contract_id": CONTRACT_ID,
         })
         
     except Exception as e:
-        print(f"[SUBMIT-TX] Error: {e}")
+        print(f"[SUBMIT] Error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
 
 @app.route('/simulate-day', methods=['POST'])
 def simulate_day():
-    """Simulate next day's trading performance"""
+    """
+    Simulate next day's trading
+    Komisyon dağılımı (arkadaşın init_vault.py mantığına göre):
+    - Developer'a: profit_share_rate % (ör: %30)
+    - Platform'a: platform_cut_rate % (ör: %10)
+    - Toplam kesinti: %40
+    """
     try:
         data = request.json
         bot_id = data.get('bot_id')
         user_public_key = data.get('user_public_key')
-        
-        print(f"[SIMULATE-DAY] bot={bot_id}, user={user_public_key[:16]}...")
         
         if not all([bot_id, user_public_key]):
             return jsonify({"success": False, "error": "Missing parameters"}), 400
@@ -398,7 +649,7 @@ def simulate_day():
         session = get_user_session(user_public_key)
         
         if bot_id not in session['active_bots']:
-            return jsonify({"success": False, "error": "Bot'a abone değilsiniz"}), 400
+            return jsonify({"success": False, "error": "Not subscribed to this bot"}), 400
         
         bot = next((b for b in TRADING_BOTS if b['id'] == bot_id), None)
         if not bot:
@@ -406,7 +657,6 @@ def simulate_day():
         
         bot_session = session['active_bots'][bot_id]
         
-        # Check if bot is still accessible
         if bot_session['commission_balance'] <= 0:
             bot_session['is_accessible'] = False
             return jsonify({
@@ -415,281 +665,109 @@ def simulate_day():
                 "needs_topup": True
             }), 400
         
-        # Generate random daily performance
+        # Generate daily performance
         performance_percent = generate_daily_performance()
-        
-        # Calculate profit in USD (simulation)
         profit_usd = bot_session['simulation_balance'] * (performance_percent / 100)
-        
-        # New balance after this day
         new_balance = bot_session['simulation_balance'] + profit_usd
         
-        # Get current high water mark (initialize if not exists for older sessions)
         high_water_mark = bot_session.get('high_water_mark', bot_session['starting_balance'])
         
-        # XLM/USD rate - 1 XLM = $0.40 (more realistic testnet rate)
-        xlm_usd_rate = 0.40  # 1 XLM = $0.40
-        commission_xlm = 0
-        commission_usd = 0
+        xlm_usd_rate = 0.40
+        total_commission_xlm = 0
+        developer_commission_xlm = 0
+        platform_commission_xlm = 0
         
-        # HIGH WATER MARK SYSTEM:
-        # Only charge commission on NEW profits above the previous high water mark
-        # Example: HWM=$1005, balance dropped to $1003, now $1007
-        #          Only charge on $1007-$1005 = $2, not on $1007-$1003 = $4
-        
+        # Only charge commission on NEW profits above HWM
         if new_balance > high_water_mark:
-            # We have NEW profits above previous high water mark!
             taxable_profit = new_balance - high_water_mark
-            commission_usd = taxable_profit * (bot['commission_rate'] / 100)
+            taxable_profit_xlm = taxable_profit / xlm_usd_rate  # USD → XLM
             
-            # Convert USD commission to XLM
-            commission_xlm = commission_usd / xlm_usd_rate
+            # İstenen davranış:
+            # - Developer: kârın %30'u
+            # - Platform: kârın %10'u
+            # - Toplam: kârın %40'ı (depozito'dan kesilir)
             
-            # Cap commission to available balance
-            if commission_xlm > bot_session['commission_balance']:
-                commission_xlm = bot_session['commission_balance']
+            developer_rate = bot['developer_rate']  # %30
+            platform_rate = bot['platform_rate']    # %10
+            total_rate = developer_rate + platform_rate  # %40
             
-            # Update high water mark to new balance
+            # Hesapla
+            developer_commission_xlm = taxable_profit_xlm * (developer_rate / 100)
+            platform_commission_xlm = taxable_profit_xlm * (platform_rate / 100)
+            total_commission_xlm = developer_commission_xlm + platform_commission_xlm
+            
+            if total_commission_xlm > bot_session['commission_balance']:
+                # Oran koruyarak düşür
+                ratio = bot_session['commission_balance'] / total_commission_xlm
+                taxable_profit_xlm *= ratio
+                total_commission_xlm = bot_session['commission_balance']
+                developer_commission_xlm = total_commission_xlm * (developer_rate / total_rate)
+                platform_commission_xlm = total_commission_xlm * (platform_rate / total_rate)
+            
             bot_session['high_water_mark'] = new_balance
-            print(f"[SIMULATE-DAY] New HWM: ${new_balance:.2f} (was ${high_water_mark:.2f})")
-        else:
-            # Balance is at or below high water mark - no commission
-            print(f"[SIMULATE-DAY] Below HWM: ${new_balance:.2f} < ${high_water_mark:.2f} - No commission")
+            
+            # Call contract to settle profit
+            # Contract'a KÂR MİKTARINI gönderiyoruz, contract toplam komisyonu hesaplayıp dağıtacak
+            if taxable_profit_xlm > 0.0001:
+                bot_index = get_bot_index(bot_id)
+                user_hash = get_user_hash(user_public_key)
+                contract_settle_profit(bot_index, user_hash, taxable_profit_xlm)
         
-        # Update simulation balance (virtual $)
+        # Update session
         bot_session['simulation_balance'] = new_balance
         bot_session['total_profit'] += profit_usd
-        
-        # Deduct commission from real XLM balance
-        bot_session['commission_balance'] -= commission_xlm
-        bot_session['total_commission_paid'] += commission_xlm
-        
-        # Update day
+        bot_session['commission_balance'] -= total_commission_xlm
+        bot_session['total_commission_paid'] += total_commission_xlm
         bot_session['current_day'] += 1
         
-        # Check if bot becomes inaccessible
         if bot_session['commission_balance'] <= 0:
             bot_session['is_accessible'] = False
         
-        # Add to daily history
-        new_day = {
+        bot_session['daily_history'].append({
             "day": bot_session['current_day'],
             "performance_percent": performance_percent,
             "profit_usd": round(profit_usd, 2),
-            "commission_xlm": round(commission_xlm, 4),
+            "commission_xlm": round(total_commission_xlm, 4),
+            "developer_xlm": round(developer_commission_xlm, 4),
+            "platform_xlm": round(platform_commission_xlm, 4),
             "simulation_balance": round(bot_session['simulation_balance'], 2),
             "commission_balance": round(bot_session['commission_balance'], 4),
-            "high_water_mark": round(bot_session.get('high_water_mark', bot_session['starting_balance']), 2)
-        }
-        bot_session['daily_history'].append(new_day)
+            "high_water_mark": round(bot_session['high_water_mark'], 2)
+        })
         
-        print(f"[SIMULATE-DAY] Day {bot_session['current_day']}: {performance_percent}% | Profit: ${profit_usd:.2f} | Commission: {commission_xlm:.4f} XLM")
-        
-        # If commission > 0, transfer to whale
-        tx_hash = None
-        if commission_xlm > 0.0001:
-            try:
-                vault_keypair = Keypair.from_secret(bot['vault_secret'])
-                vault_account = server.load_account(bot['deposit_address'])
-                
-                transaction = (
-                    TransactionBuilder(
-                        source_account=vault_account,
-                        network_passphrase=NETWORK_PASSPHRASE,
-                        base_fee=100
-                    )
-                    .append_payment_op(
-                        destination=bot['whale_address'],
-                        asset=Asset.native(),
-                        amount=str(round(commission_xlm, 7))
-                    )
-                    .set_timeout(30)
-                    .build()
-                )
-                
-                transaction.sign(vault_keypair)
-                response = server.submit_transaction(transaction)
-                tx_hash = response.get('hash')
-                print(f"[SIMULATE-DAY] Commission transferred: {tx_hash[:16]}...")
-                
-            except Exception as e:
-                print(f"[SIMULATE-DAY] Commission transfer failed: {e}")
+        print(f"[SIMULATE] Day {bot_session['current_day']}: {performance_percent}%")
+        print(f"  → Developer ({bot['developer'][:16]}...): {developer_commission_xlm:.4f} XLM")
+        print(f"  → Platform ({PLATFORM_PUBLIC_KEY[:16]}...): {platform_commission_xlm:.4f} XLM")
         
         return jsonify({
             "success": True,
             "day": bot_session['current_day'],
             "performance_percent": performance_percent,
             "profit_usd": round(profit_usd, 2),
-            "commission_xlm": round(commission_xlm, 4),
+            "commission_xlm": round(total_commission_xlm, 4),
+            "developer_xlm": round(developer_commission_xlm, 4),
+            "platform_xlm": round(platform_commission_xlm, 4),
             "simulation_balance": round(bot_session['simulation_balance'], 2),
             "commission_balance": round(bot_session['commission_balance'], 4),
             "total_profit": round(bot_session['total_profit'], 2),
             "total_commission_paid": round(bot_session['total_commission_paid'], 4),
             "is_accessible": bot_session['is_accessible'],
-            "commission_tx": tx_hash,
-            "daily_history": bot_session['daily_history']
+            "commission_to": bot['developer'],
+            "contract_id": CONTRACT_ID,
         })
         
     except Exception as e:
-        print(f"[SIMULATE-DAY] Error: {e}")
+        print(f"[SIMULATE] Error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
-@app.route('/reset-simulation', methods=['POST'])
-def reset_simulation():
-    """Reset simulation and refund all commissions from whale back to vault"""
-    try:
-        data = request.json
-        bot_id = data.get('bot_id')
-        user_public_key = data.get('user_public_key')
-        
-        print(f"[RESET] bot={bot_id}, user={user_public_key[:16]}...")
-        
-        if not all([bot_id, user_public_key]):
-            return jsonify({"success": False, "error": "Missing parameters"}), 400
-        
-        session = get_user_session(user_public_key)
-        
-        if bot_id not in session['active_bots']:
-            return jsonify({"success": False, "error": "You are not subscribed to this bot"}), 400
-        
-        bot = next((b for b in TRADING_BOTS if b['id'] == bot_id), None)
-        if not bot:
-            return jsonify({"success": False, "error": "Bot not found"}), 404
-        
-        bot_session = session['active_bots'][bot_id]
-        total_commission = bot_session['total_commission_paid']
-        original_deposit = bot_session['total_deposited']
-        
-        refund_tx = None
-        
-        # Refund commissions from whale back to vault
-        if total_commission > 0.0001:
-            try:
-                whale_keypair = Keypair.from_secret(bot['whale_secret'])
-                whale_account = server.load_account(bot['whale_address'])
-                
-                transaction = (
-                    TransactionBuilder(
-                        source_account=whale_account,
-                        network_passphrase=NETWORK_PASSPHRASE,
-                        base_fee=100
-                    )
-                    .append_payment_op(
-                        destination=bot['deposit_address'],
-                        asset=Asset.native(),
-                        amount=str(round(total_commission, 7))
-                    )
-                    .set_timeout(30)
-                    .build()
-                )
-                
-                transaction.sign(whale_keypair)
-                response = server.submit_transaction(transaction)
-                refund_tx = response.get('hash')
-                print(f"[RESET] Refunded {total_commission} XLM: {refund_tx[:16]}...")
-                
-            except Exception as e:
-                print(f"[RESET] Refund failed: {e}")
-        
-        # Reset session
-        session['active_bots'][bot_id] = {
-            "commission_balance": original_deposit,
-            "total_deposited": original_deposit,
-            "total_commission_paid": 0,
-            "simulation_balance": STARTING_SIMULATION_BALANCE,
-            "starting_balance": STARTING_SIMULATION_BALANCE,
-            "total_profit": 0,
-            "high_water_mark": STARTING_SIMULATION_BALANCE,
-            "current_day": 0,
-            "daily_history": [
-                {
-                    "day": 0,
-                    "performance_percent": 0,
-                    "profit_usd": 0,
-                    "commission_xlm": 0,
-                    "simulation_balance": STARTING_SIMULATION_BALANCE,
-                    "commission_balance": original_deposit,
-                    "high_water_mark": STARTING_SIMULATION_BALANCE
-                }
-            ],
-            "is_accessible": True,
-            "deposit_tx": bot_session.get('deposit_tx', '')
-        }
-        
-        return jsonify({
-            "success": True,
-            "message": f"Reset complete! {round(total_commission, 4)} XLM commission refunded.",
-            "refunded_amount": round(total_commission, 4),
-            "refund_tx": refund_tx,
-            "new_commission_balance": original_deposit,
-            "new_simulation_balance": STARTING_SIMULATION_BALANCE
-        })
-        
-    except Exception as e:
-        print(f"[RESET] Error: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
-
-@app.route('/topup', methods=['POST'])
-def topup_commission():
-    """Add more commission balance to existing bot subscription"""
-    try:
-        data = request.json
-        bot_id = data.get('bot_id')
-        user_public_key = data.get('user_public_key')
-        amount = data.get('amount', '10')
-        
-        print(f"[TOPUP] Creating topup tx for bot={bot_id}, amount={amount}")
-        
-        if not all([bot_id, user_public_key]):
-            return jsonify({"success": False, "error": "Missing parameters"}), 400
-        
-        bot = next((b for b in TRADING_BOTS if b['id'] == bot_id), None)
-        if not bot:
-            return jsonify({"success": False, "error": "Bot not found"}), 404
-        
-        try:
-            source_account = server.load_account(user_public_key)
-        except NotFoundError:
-            return jsonify({
-                "success": False,
-                "error": "Account not found"
-            }), 400
-        
-        transaction = (
-            TransactionBuilder(
-                source_account=source_account,
-                network_passphrase=NETWORK_PASSPHRASE,
-                base_fee=100
-            )
-            .append_payment_op(
-                destination=bot['deposit_address'],
-                asset=Asset.native(),
-                amount=str(amount)
-            )
-            .set_timeout(300)
-            .build()
-        )
-        
-        return jsonify({
-            "success": True,
-            "xdr": transaction.to_xdr(),
-            "network_passphrase": NETWORK_PASSPHRASE,
-            "is_topup": True
-        })
-        
-    except Exception as e:
-        print(f"[TOPUP] Error: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/withdraw', methods=['POST'])
 def withdraw():
-    """Withdraw remaining commission balance back to user"""
+    """Create contract withdraw transaction"""
     try:
         data = request.json
         bot_id = data.get('bot_id')
         user_public_key = data.get('user_public_key')
-        
-        print(f"[WITHDRAW] bot={bot_id}, user={user_public_key[:16]}...")
         
         if not all([bot_id, user_public_key]):
             return jsonify({"success": False, "error": "Missing parameters"}), 400
@@ -697,11 +775,7 @@ def withdraw():
         session = get_user_session(user_public_key)
         
         if bot_id not in session['active_bots']:
-            return jsonify({"success": False, "error": "You are not subscribed to this bot"}), 400
-        
-        bot = next((b for b in TRADING_BOTS if b['id'] == bot_id), None)
-        if not bot:
-            return jsonify({"success": False, "error": "Bot not found"}), 404
+            return jsonify({"success": False, "error": "Not subscribed"}), 400
         
         bot_session = session['active_bots'][bot_id]
         remaining = bot_session['commission_balance']
@@ -711,84 +785,160 @@ def withdraw():
             return jsonify({
                 "success": True,
                 "message": "No balance to withdraw",
-                "amount_withdrawn": 0
+                "amount_withdrawn": 0,
+                "needs_signing": False
             })
         
-        try:
-            vault_keypair = Keypair.from_secret(bot['vault_secret'])
-            vault_account = server.load_account(bot['deposit_address'])
-            
-            transaction = (
-                TransactionBuilder(
-                    source_account=vault_account,
-                    network_passphrase=NETWORK_PASSPHRASE,
-                    base_fee=100
-                )
-                .append_payment_op(
-                    destination=user_public_key,
-                    asset=Asset.native(),
-                    amount=str(round(remaining, 7))
-                )
-                .set_timeout(30)
-                .build()
-            )
-            
-            transaction.sign(vault_keypair)
-            response = server.submit_transaction(transaction)
-            
-            tx_hash = response.get('hash', '')
-            print(f"[WITHDRAW] SUCCESS! {remaining} XLM -> {tx_hash[:16]}...")
-            
-            del session['active_bots'][bot_id]
-            
-            return jsonify({
-                "success": True,
-                "amount_withdrawn": round(remaining, 4),
-                "transaction_hash": tx_hash,
-                "explorer_url": f"https://stellar.expert/explorer/testnet/tx/{tx_hash}"
-            })
-            
-        except Exception as e:
-            print(f"[WITHDRAW] Transaction error: {e}")
-            return jsonify({"success": False, "error": str(e)}), 500
+        # Create contract withdraw XDR
+        bot_index = get_bot_index(bot_id)
+        user_hash = get_user_hash(user_public_key)
+        
+        xdr, error = contract_withdraw(bot_index, user_hash, remaining, user_public_key)
+        
+        if error:
+            return jsonify({"success": False, "error": f"Contract error: {error}"}), 400
+        
+        return jsonify({
+            "success": True,
+            "xdr": xdr,
+            "amount": round(remaining, 4),
+            "network_passphrase": NETWORK_PASSPHRASE,
+            "contract_id": CONTRACT_ID,
+            "needs_signing": True
+        })
         
     except Exception as e:
         print(f"[WITHDRAW] Error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/submit-withdraw', methods=['POST'])
+def submit_withdraw():
+    """Submit signed withdraw transaction"""
+    try:
+        data = request.json
+        signed_xdr = data.get('signed_xdr')
+        bot_id = data.get('bot_id')
+        user_public_key = data.get('user_public_key')
+        
+        if not signed_xdr:
+            return jsonify({"success": False, "error": "Missing signed_xdr"}), 400
+        
+        result = submit_signed_tx(signed_xdr)
+        
+        if not result['success']:
+            return jsonify({"success": False, "error": result.get('error')}), 400
+        
+        # Remove subscription
+        session = get_user_session(user_public_key)
+        amount = 0
+        if bot_id in session['active_bots']:
+            amount = session['active_bots'][bot_id]['commission_balance']
+            del session['active_bots'][bot_id]
+        
+        return jsonify({
+            "success": True,
+            "amount_withdrawn": round(amount, 4),
+            "transaction_hash": result.get('hash', ''),
+            "explorer_url": f"https://stellar.expert/explorer/testnet/tx/{result.get('hash', '')}"
+        })
+        
+    except Exception as e:
+        print(f"[SUBMIT-WITHDRAW] Error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/reset-simulation', methods=['POST'])
+def reset_simulation():
+    """Reset simulation (keeps deposit, resets trading simulation)"""
+    try:
+        data = request.json
+        bot_id = data.get('bot_id')
+        user_public_key = data.get('user_public_key')
+        
+        if not all([bot_id, user_public_key]):
+            return jsonify({"success": False, "error": "Missing parameters"}), 400
+        
+        session = get_user_session(user_public_key)
+        
+        if bot_id not in session['active_bots']:
+            return jsonify({"success": False, "error": "Not subscribed"}), 400
+        
+        bot_session = session['active_bots'][bot_id]
+        original_deposit = bot_session['total_deposited']
+        
+        session['active_bots'][bot_id] = {
+            "commission_balance": original_deposit,
+            "total_deposited": original_deposit,
+            "total_commission_paid": 0,
+            "simulation_balance": STARTING_SIMULATION_BALANCE,
+            "starting_balance": STARTING_SIMULATION_BALANCE,
+            "total_profit": 0,
+            "high_water_mark": STARTING_SIMULATION_BALANCE,
+            "current_day": 0,
+            "daily_history": [{
+                "day": 0,
+                "performance_percent": 0,
+                "profit_usd": 0,
+                "commission_xlm": 0,
+                "simulation_balance": STARTING_SIMULATION_BALANCE,
+                "commission_balance": original_deposit,
+                "high_water_mark": STARTING_SIMULATION_BALANCE
+            }],
+            "is_accessible": True,
+        }
+        
+        return jsonify({
+            "success": True,
+            "message": "Simulation reset!",
+            "new_commission_balance": original_deposit,
+            "new_simulation_balance": STARTING_SIMULATION_BALANCE
+        })
+        
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/topup', methods=['POST'])
+def topup():
+    """Create topup transaction (same as deposit)"""
+    return create_deposit_tx()
+
 
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({
         "status": "healthy",
         "network": "stellar-testnet",
-        "horizon": HORIZON_URL
+        "contract_id": CONTRACT_ID,
+        "developer": DEVELOPER_PUBLIC_KEY,
     })
+
+
+@app.route('/contract-info', methods=['GET'])
+def contract_info():
+    """Get contract information"""
+    return jsonify({
+        "success": True,
+        "contract_id": CONTRACT_ID,
+        "developer_wallet": DEVELOPER_PUBLIC_KEY,
+        "native_asset": NATIVE_ASSET_ID,
+        "network": "testnet",
+        "explorer": f"https://stellar.expert/explorer/testnet/contract/{CONTRACT_ID}"
+    })
+
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("Profit Sharing App - Commission Based Access")
+    print("🐋 Whaleer.com Demo - Profit Sharing via Smart Contract")
     print("=" * 60)
-    print(f"Network: Stellar Testnet")
-    print(f"Horizon: {HORIZON_URL}")
-    print(f"Starting Simulation Balance: ${STARTING_SIMULATION_BALANCE}")
+    print(f"Contract ID: {CONTRACT_ID}")
+    print(f"Developer:   {DEVELOPER_PUBLIC_KEY}")
+    print(f"Native XLM:  {NATIVE_ASSET_ID}")
     print()
-    
-    initialize_bot_accounts()
-    
-    print()
-    print("=" * 60)
-    print("ENDPOINTS:")
-    print("  GET  /bots                - List all bots")
-    print("  GET  /status              - Get user status")
-    print("  POST /create-deposit-tx   - Create deposit transaction")
-    print("  POST /submit-transaction  - Submit signed transaction")
-    print("  POST /simulate-day        - Simulate next trading day")
-    print("  POST /reset-simulation    - Reset & refund commissions")
-    print("  POST /topup               - Add more commission balance")
-    print("  POST /withdraw            - Withdraw commission balance")
-    print("  GET  /debug/vaults        - Debug vault balances")
+    print("All deposits/withdraws go through Soroban Smart Contract")
+    print("Commissions are automatically sent to developer wallet")
     print("=" * 60)
     print()
-    print("Starting on port 5328...")
     
     app.run(host='127.0.0.1', port=5328, debug=True)
