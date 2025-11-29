@@ -120,7 +120,7 @@ TRADING_BOTS = [
 ]
 
 # Starting simulation balance
-STARTING_SIMULATION_BALANCE = 1000.0  # $1000 virtual money
+STARTING_SIMULATION_BALANCE = 100.0  # $100 virtual money
 
 # ============== HELPER FUNCTIONS ==============
 
