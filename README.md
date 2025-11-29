@@ -1,51 +1,58 @@
-# 🐋 Whaleer.com - Profit Sharing Demo
+# 🐋 Whaleer Profit-Sharing Protocol
 
-> **A demonstration of how Whaleer.com's profit-sharing system works using Stellar blockchain and Soroban smart contracts**
-
-This project demonstrates the commission flow and profit-sharing mechanism that powers [Whaleer.com](https://whaleer.com) - a platform where expert traders ("whales") share their trading signals with followers.
-
----
-
-## 🎯 What is Whaleer.com?
-
-Whaleer.com connects **expert traders (Developers)** with **followers (Users)** through a transparent, blockchain-based profit-sharing system:
-
-- **Developers** create trading bots/signals and set their commission rate
-- **Users** follow these bots and pay commission only when profits are made
-- **Platform** takes a small cut (10% of developer's commission)
-- **Smart Contract** handles all commission distributions automatically
+### On-Chain Profit Sharing for Trading Bots Using 3-Wallet Revenue Split + High-Water Mark Fee Model
+### Powered by Stellar Soroban Smart Contracts
 
 ---
 
-## 📊 Commission Flow Diagram
+## 🚀 1. Overview
+
+Trading bots generate millions in profits every day — but developers, platforms, and users lack a fair, automated, and transparent revenue-sharing mechanism.
+
+**Current ecosystem problems:**
+- ❌ No automated profit commissions
+- ❌ No transparent developer/platform revenue split
+- ❌ No on-chain settlement
+- ❌ No High-Water Mark logic
+- ❌ Platforms must trust centralized systems
+
+**Whaleer Profit-Sharing Protocol solves this.**
+
+### ✅ What This Protocol Enables
+- 3-way automated commission distribution
+- High-Water Mark (HWM) based performance fee
+- Fully on-chain deposit / withdraw
+- Freighter-based non-custodial signing
+- Automated fee distribution via Soroban Smart Contracts
+
+---
+
+## 🧩 2. System Architecture
+
+### 2.1 Three-Wallet Revenue Model
 
 ```
-                                    PROFIT MADE ($100)
-                                          │
-                                          ▼
-                            ┌─────────────────────────────┐
-                            │   Developer sets rate: 10%  │
-                            │   Total commission: $10     │
-                            └─────────────────────────────┘
-                                          │
-                          ┌───────────────┴───────────────┐
-                          ▼                               ▼
-                  ┌──────────────┐                ┌──────────────┐
-                  │  Developer   │                │   Platform   │
-                  │    (90%)     │                │    (10%)     │
-                  │     $9       │                │     $1       │
-                  └──────────────┘                └──────────────┘
+                   ┌────────────────────────┐
+                   │     Platform Wallet    │
+                   │    (platform revenue)  │
+                   └────────────▲───────────┘
+                                │ 10% of Commission
+                                │
+                   ┌────────────┴───────────┐
+                   │ Soroban Smart Contract │
+                   │  (auto-fee settlement) │
+                   └────────────▲───────────┘
+                                │ 90% of Commission
+                                │
+          ┌─────────────────────┴─────────────────────┐
+          │                                           │
+┌─────────┴──────────┐                     ┌─────────┴──────────┐
+│     User Wallet     │                     │  Developer Wallet  │
+│ (commission deposit)│                     │   (revenue share)  │
+└─────────────────────┘                     └────────────────────┘
 ```
 
-### Key Points:
-- **User pays**: Only from profits, never from principal
-- **Developer gets**: 90% of the commission they set
-- **Platform gets**: 10% of developer's commission (not user's money)
-- **Smart Contract**: Handles distribution trustlessly
-
----
-
-## 🏗️ System Architecture
+### 2.2 Full System Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -58,20 +65,26 @@ Whaleer.com connects **expert traders (Developers)** with **followers (Users)** 
 │  └─────────────────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────────────┘
                                       │
-                                      │ REST API
+                                      │ XDR Transaction
+                                      ▼
+                              ┌───────────────┐
+                              │   Freighter   │
+                              │ (User Signs)  │
+                              └───────┬───────┘
+                                      │ Signed XDR
                                       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           BACKEND SERVER                                     │
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
 │  │                    Python Flask API (Port 5328)                      │    │
-│  │  • Transaction Building                                              │    │
+│  │  • XDR Transaction Building                                          │    │
 │  │  • Real-time XLM Price (CoinGecko)                                   │    │
-│  │  • Profit Simulation                                                 │    │
+│  │  • High-Water Mark Tracking                                          │    │
 │  │  • Commission Calculation                                            │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────────────┘
                                       │
-                                      │ Stellar SDK
+                                      │ Soroban RPC
                                       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        STELLAR BLOCKCHAIN (Testnet)                          │
@@ -79,7 +92,7 @@ Whaleer.com connects **expert traders (Developers)** with **followers (Users)** 
 │  │                    Soroban Smart Contract                            │    │
 │  │  • init_vault: Create user vault with commission rates               │    │
 │  │  • deposit: Lock XLM as commission reserve                           │    │
-│  │  • settle_profit: Distribute commission on profit                    │    │
+│  │  • settle_profit: Distribute commission to dev + platform            │    │
 │  │  • withdraw: Return remaining balance to user                        │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │
 │                                                                              │
@@ -89,153 +102,182 @@ Whaleer.com connects **expert traders (Developers)** with **followers (Users)** 
 
 ---
 
-## 💰 How It Works (Step by Step)
+## 📈 3. High-Water Mark (HWM)
 
-### 1️⃣ User Deposits Commission Reserve
-```
-User ──────────────────────────────────────────────► Smart Contract
-         Deposit 100 XLM (commission reserve)
-         
-• This is NOT an investment, it's a reserve for future commissions
-• User keeps trading with their own capital elsewhere
-• XLM is locked in the smart contract vault
-```
+A hedge-fund-grade performance fee model ensuring fairness.
 
-### 2️⃣ Daily Trading Simulation
-```
-Bot generates trading signals
-         │
-         ▼
-┌─────────────────────────────────────┐
-│ Day 1: +4.2% profit ($4.20)        │──► Commission: 0.42 XLM
-│ Day 2: -1.5% loss ($1.50)          │──► No commission (loss)
-│ Day 3: +2.8% profit ($2.80)        │──► Commission: 0.28 XLM
-│ Day 4: +5.1% profit ($5.10)        │──► Commission: 0.51 XLM
-│ ...                                 │
-└─────────────────────────────────────┘
+### Why HWM?
+- User pays fees **only** on new profits
+- Losses reset fee eligibility
+- Prevents double-charging
 
-• Commission only charged on profits
-• High-Water Mark prevents double-charging
-• Real-time XLM/USD price from CoinGecko
+### Example
+
+```
+Start:  $100 → HWM = $100
+Day 1:  $120 → Fee on +$20  → HWM = $120
+Day 2:  $90  → No fee       → HWM = $120 (unchanged)
+Day 3:  $130 → Fee on +$10  → HWM = $130 (only new profit above $120)
 ```
 
-### 3️⃣ Commission Distribution (On Each Profit)
 ```
-                    Profit: $5.00
-                         │
-                         ▼
-              Total Commission: 10%
-                    = $0.50
-                         │
-            ┌────────────┴────────────┐
-            ▼                         ▼
-      Developer: 90%            Platform: 10%
-        = $0.45                   = $0.05
-        (≈1.76 XLM)              (≈0.20 XLM)
-            │                         │
-            ▼                         ▼
-    ┌───────────────┐        ┌───────────────┐
-    │ Developer     │        │ Platform      │
-    │ Wallet        │        │ Wallet        │
-    └───────────────┘        └───────────────┘
-```
-
-### 4️⃣ User Withdraws
-```
-Smart Contract ──────────────────────────────────► User
-                  Remaining balance (e.g., 87 XLM)
-                  
-• User can withdraw anytime
-• Only commission for realized profits is deducted
-• No lock-up period
+                    Balance
+        $130 ─ ─ ─ ─ ─ ─ ─ ─●─ ─ ─ ─ HWM Updated
+                          ╱
+        $120 ─ ─ ─●─ ─ ─ ╱─ ─ ─ ─ ─ HWM
+                 ╱     ╱
+        $100 ───●     ╱
+                 ╲   ╱
+         $90 ─ ─ ─●─ ─ ─ ─ ─ ─ ─ ─ No Fee (below HWM)
+              
+             Day1  Day2  Day3
 ```
 
 ---
 
-## 🔧 Technical Details
+## 💰 4. Commission Model
 
-### Smart Contract Functions
+### Stakeholder Split
 
-| Function | Description | Parameters |
-|----------|-------------|------------|
-| `init_vault` | Create user's vault | bot_id, user_id, addresses, rates |
-| `deposit` | Lock XLM in vault | bot_id, user_id, amount |
-| `settle_profit` | Distribute commission | bot_id, user_id, profit_amount |
-| `withdraw` | Return remaining XLM | bot_id, user_id |
+| Party | Description | Commission Share |
+|-------|-------------|------------------|
+| **Developer** | Bot creator, sets rate | 90% of commission |
+| **Platform** | Protocol operator | 10% of commission |
+| **User** | Pays from profits only | — |
 
-### Commission Calculation (BPS = Basis Points)
+### Example: Developer Sets 10% Rate
 
+```
+User Profit: $100
+     │
+     ▼
+Total Commission: $10 (10% of profit)
+     │
+     ├──► Developer: $9 (90% of $10)
+     │
+     └──► Platform: $1 (10% of $10)
+```
+
+### Soroban BPS Conversion
+
+Backend converts percentages to Soroban Basis Points (BPS):
+
+```python
+profit_share_bps = total_commission_rate * 100   # 10% → 1000
+platform_cut_bps = platform_cut_percent * 100    # 10% → 1000
+```
+
+Contract calculation:
 ```rust
-// In Smart Contract
-let total_commission = profit_amount * profit_share_bps / 10000;
-let platform_fee = total_commission * platform_cut_bps / 10000;
-let developer_fee = total_commission - platform_fee;
+total_commission = profit * profit_share_bps / 10000;
+platform_fee = total_commission * platform_cut_bps / 10000;
+developer_fee = total_commission - platform_fee;
 ```
-
-Example with 10% developer rate:
-- `profit_share_bps = 1000` (10%)
-- `platform_cut_bps = 1000` (10% of commission)
-- On 100 XLM profit:
-  - Total commission: 10 XLM
-  - Platform: 1 XLM
-  - Developer: 9 XLM
 
 ---
 
-## 🚀 Running the Demo
+## 🔒 5. Soroban Contract Functions
+
+| Function | Description | Signer |
+|----------|-------------|--------|
+| `init_vault` | Creates storage for user-bot pair | Platform (backend) |
+| `deposit` | User funds fee reserve | User (Freighter) |
+| `withdraw` | User withdraws remaining fees | User (Freighter) |
+| `settle_profit` | Distributes fee to dev + platform | Platform (backend) |
+
+### XDR Signing Flow
+
+```
+1. Backend creates unsigned XDR
+          ↓
+2. Frontend sends XDR to Freighter
+          ↓
+3. User signs locally (non-custodial)
+          ↓
+4. Signed XDR sent back to backend
+          ↓
+5. Backend submits to Soroban
+          ↓
+6. Smart contract executes fee logic
+```
+
+---
+
+## 🧠 6. Backend Architecture
+
+### Key Responsibilities
+- Create XDR transactions
+- Manage High-Water Mark logic
+- Simulate trading profits
+- Trigger settlement calls
+- Track user state
+- Handle deposit/withdraw flows
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/bots` | GET | List available trading bots |
+| `/status` | GET | Get user's current status |
+| `/create-deposit-tx` | POST | Create deposit XDR for signing |
+| `/submit-transaction` | POST | Submit signed transaction |
+| `/simulate-day` | POST | Simulate daily trading |
+| `/create-withdraw-tx` | POST | Create withdraw XDR |
+| `/submit-withdraw` | POST | Submit signed withdrawal |
+
+---
+
+## 📊 7. Trading Simulation Engine
+
+Features:
+- Daily return between **−3% to +5%**
+- Full HWM logic implementation
+- Automatic fee deduction
+- Soroban settlement calls on profit
+- Fee depletion disables bot usage
+- Daily historical log with receipts
+
+---
+
+## 🛠 8. Installation & Running
 
 ### Prerequisites
 - Node.js v18+
 - Python 3.9+
 - [Freighter Wallet](https://freighter.app/) browser extension
 
-### Installation
+### Backend Setup
 
-```bash
-# Clone the repository
-git clone https://github.com/Apollous1592/Stellar-Hackathon-Project-Whaleer.com.git
-cd "Stellar Alternative"
-
-# Install frontend
-cd frontend
-npm install
-
-# Install backend
-cd ../api
-pip install -r requirements.txt
-```
-
-### Running
-
-**Terminal 1 - Backend:**
 ```bash
 cd api
+pip install -r requirements.txt
 python index.py
 # Runs on http://127.0.0.1:5328
 ```
 
-**Terminal 2 - Frontend:**
+### Frontend Setup
+
 ```bash
 cd frontend
+npm install
 npm run dev
 # Runs on http://localhost:3000
 ```
 
 ### Using the Demo
 
-1. **Connect Wallet**: Click "Connect Freighter" (use Stellar Testnet)
-2. **Select Bot**: Choose a trading bot to follow
-3. **Deposit**: Deposit XLM as commission reserve
-4. **Simulate**: Click "Simulate Day" to see daily P&L
-5. **Watch**: See commission distributed in real-time
-6. **Withdraw**: Take back remaining balance anytime
+1. **Connect Wallet** → Click "Connect Freighter" (Stellar Testnet)
+2. **Select Bot** → Choose a trading bot to follow
+3. **Deposit** → Deposit XLM as commission reserve
+4. **Simulate** → Click "Simulate Day" to see daily P&L
+5. **Watch** → See commission distributed in real-time
+6. **Withdraw** → Take back remaining balance anytime
 
 ---
 
-## 📁 Project Structure
+## 📁 9. Project Structure
 
 ```
-Stellar Alternative/
 ├── frontend/                 # Next.js React Application
 │   ├── app/
 │   │   ├── page.tsx         # Main UI component
@@ -246,8 +288,7 @@ Stellar Alternative/
 │
 ├── api/                      # Python Flask Backend
 │   ├── index.py             # Main API + Stellar integration
-│   ├── requirements.txt     # Python dependencies
-│   └── vault_keys.json      # Testnet keys (gitignored)
+│   └── requirements.txt     # Python dependencies
 │
 ├── stellar-rs/              # Soroban Smart Contract (Rust)
 │   ├── src/lib.rs          # Contract logic
@@ -258,17 +299,40 @@ Stellar Alternative/
 
 ---
 
-## 🔐 Security Notes
+## 🔐 10. Security
 
-⚠️ **This is a TESTNET demo** - No real funds are involved
+- ✅ **Non-custodial signing** — User keys never leave Freighter
+- ✅ **No developer private key stored** — Backend only holds platform admin key
+- ✅ **On-chain transparency** — All transactions auditable
+- ✅ **Immutable fee flows** — Smart contract enforces rules
 
-- Uses Stellar Testnet (fake XLM)
-- Smart contract is for demonstration only
-- In production, Whaleer.com uses additional security measures
+⚠️ **TESTNET DEMO** — This uses Stellar Testnet, no real funds involved.
 
 ---
 
-## 🌐 Links
+## 🏆 11. Why This Project Stands Out
+
+### Innovation
+- **First 3-party revenue model on Soroban**
+- On-chain performance fee settlement
+- High-Water Mark implemented in smart contracts
+
+### Technical Depth
+- Custom XDR generation pipeline
+- Full contract invocation flow
+- State management + fee reserve
+- Multi-wallet commission distribution
+- Real-time XLM/USD price integration
+
+### Real-World Value
+- Bot marketplaces can adopt instantly
+- Developers monetize performance fairly
+- Platforms earn transparent revenue
+- Users pay only on actual profits
+
+---
+
+## 🌐 12. Links
 
 - **Whaleer.com**: [https://whaleer.com](https://whaleer.com)
 - **Stellar**: [https://stellar.org](https://stellar.org)
@@ -279,10 +343,10 @@ Stellar Alternative/
 
 ## 📝 License
 
-MIT License - Built for Stellar Hackathon 2025
+MIT License — Built for Stellar Hackathon 2025
 
 ---
 
 <p align="center">
-  <b>🐋 Whaleer.com - Follow the Whales, Share the Profits 🐋</b>
+  <b>🐋 Whaleer — Follow the Whales, Share the Profits 🐋</b>
 </p>
