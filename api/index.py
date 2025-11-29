@@ -53,9 +53,9 @@ TRADING_BOTS = [
         "id": "bot-alpha",
         "name": "Bot Alpha",
         "strategy": "Trend Following - EMA crossovers",
-        "developer_rate": 30,  # Kârın %30'u developer'a
-        "platform_rate": 10,   # Kârın %10'u platform'a
-        # Toplam: %40 komisyon
+        "developer_rate": 10,  # Kârın %10'u developer'a
+        "platform_rate": 1,    # Kârın %1'i platform'a (developer'ın %10'u)
+        # Toplam: %11 komisyon
         "min_commission_deposit": 10,
         "developer": DEVELOPER_PUBLIC_KEY,
         "platform": PLATFORM_PUBLIC_KEY,
@@ -64,9 +64,9 @@ TRADING_BOTS = [
         "id": "bot-beta",
         "name": "Bot Beta", 
         "strategy": "Arbitrage - Cross-exchange",
-        "developer_rate": 25,  # Kârın %25'i developer'a
-        "platform_rate": 10,   # Kârın %10'u platform'a
-        # Toplam: %35 komisyon
+        "developer_rate": 10,  # Kârın %10'u developer'a
+        "platform_rate": 1,    # Kârın %1'i platform'a (developer'ın %10'u)
+        # Toplam: %11 komisyon
         "min_commission_deposit": 5,
         "developer": DEVELOPER_PUBLIC_KEY,
         "platform": PLATFORM_PUBLIC_KEY,
@@ -75,9 +75,9 @@ TRADING_BOTS = [
         "id": "bot-gamma",
         "name": "Bot Gamma",
         "strategy": "DCA - Smart timing",
-        "developer_rate": 20,  # Kârın %20'si developer'a
-        "platform_rate": 10,   # Kârın %10'u platform'a
-        # Toplam: %30 komisyon
+        "developer_rate": 10,  # Kârın %10'u developer'a
+        "platform_rate": 1,    # Kârın %1'i platform'a (developer'ın %10'u)
+        # Toplam: %11 komisyon
         "min_commission_deposit": 5,
         "developer": DEVELOPER_PUBLIC_KEY,
         "platform": PLATFORM_PUBLIC_KEY,
@@ -749,6 +749,7 @@ def simulate_day():
             "platform_xlm": round(platform_commission_xlm, 4),
             "simulation_balance": round(bot_session['simulation_balance'], 2),
             "commission_balance": round(bot_session['commission_balance'], 4),
+            "high_water_mark": round(bot_session['high_water_mark'], 2),
             "total_profit": round(bot_session['total_profit'], 2),
             "total_commission_paid": round(bot_session['total_commission_paid'], 4),
             "is_accessible": bot_session['is_accessible'],

@@ -81,6 +81,18 @@ export default function Home() {
   const [freighterInstalled, setFreighterInstalled] = useState<boolean | null>(null);
   const [xlmBalance, setXlmBalance] = useState<string | null>(null);
   const [expandedBot, setExpandedBot] = useState<string | null>(null);
+  const [showReceipt, setShowReceipt] = useState<{
+    day: number;
+    scenario: 'profit' | 'loss' | 'below_hwm';
+    performance_percent: number;
+    profit_usd: number;
+    developer_xlm: number;
+    platform_xlm: number;
+    total_commission_xlm: number;
+    high_water_mark: number;
+    simulation_balance: number;
+    commission_balance: number;
+  } | null>(null);
 
   // Check if Freighter is installed
   useEffect(() => {
@@ -473,12 +485,28 @@ export default function Home() {
       const data = await res.json();
       
       if (data.success) {
-        const sign = data.performance_percent >= 0 ? '+' : '';
-        const profitSign = data.profit_usd >= 0 ? '+' : '';
-        setMessage({ 
-          type: data.performance_percent >= 0 ? 'success' : 'warning', 
-          text: `Day ${data.day}: ${sign}${data.performance_percent}% | Profit: ${profitSign}$${data.profit_usd.toFixed(2)} | Commission: ${data.commission_xlm.toFixed(4)} XLM` 
+        // Determine scenario
+        let scenario: 'profit' | 'loss' | 'below_hwm' = 'profit';
+        if (data.profit_usd < 0) {
+          scenario = 'loss';
+        } else if (data.commission_xlm === 0 && data.profit_usd >= 0) {
+          scenario = 'below_hwm';
+        }
+        
+        // Show receipt modal
+        setShowReceipt({
+          day: data.day,
+          scenario,
+          performance_percent: data.performance_percent,
+          profit_usd: data.profit_usd,
+          developer_xlm: data.developer_xlm || 0,
+          platform_xlm: data.platform_xlm || 0,
+          total_commission_xlm: data.commission_xlm,
+          high_water_mark: data.high_water_mark || 0,
+          simulation_balance: data.simulation_balance,
+          commission_balance: data.commission_balance,
         });
+        
         fetchUserStatus();
         checkAccountBalance();
       } else {
@@ -495,40 +523,7 @@ export default function Home() {
     }
   };
 
-  const handleReset = async (botId: string) => {
-    if (!wallet.publicKey) return;
-    
-    setActionLoading(`reset-${botId}`);
-    setMessage(null);
-    
-    try {
-      const res = await fetch('/api/reset-simulation', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          bot_id: botId,
-          user_public_key: wallet.publicKey,
-        }),
-      });
-      
-      const data = await res.json();
-      
-      if (data.success) {
-        setMessage({ 
-          type: 'success', 
-          text: `Reset complete! ${data.refunded_amount.toFixed(4)} XLM commission refunded.`
-        });
-        fetchUserStatus();
-        checkAccountBalance();
-      } else {
-        setMessage({ type: 'error', text: data.error || 'Reset failed' });
-      }
-    } catch {
-      setMessage({ type: 'error', text: 'Reset failed' });
-    } finally {
-      setActionLoading(null);
-    }
-  };
+
 
   const handleWithdraw = async (botId: string) => {
     if (!wallet.publicKey) return;
@@ -789,15 +784,15 @@ export default function Home() {
                 <div className="details">
                   <div className="detail-item" style={{ background: '#fef3c7', padding: '0.5rem', borderRadius: '6px' }}>
                     <div className="detail-label">🧑‍💻 Developer Commission</div>
-                    <div className="detail-value" style={{ color: '#b45309', fontWeight: 'bold' }}>{bot.developer_rate || 30}% of profits</div>
+                    <div className="detail-value" style={{ color: '#b45309', fontWeight: 'bold' }}>{bot.developer_rate || 10}% of profits</div>
                   </div>
                   <div className="detail-item" style={{ background: '#dbeafe', padding: '0.5rem', borderRadius: '6px' }}>
-                    <div className="detail-label">🏢 Platform Commission</div>
-                    <div className="detail-value" style={{ color: '#1d4ed8', fontWeight: 'bold' }}>{bot.platform_rate || 10}% of profits</div>
+                    <div className="detail-label">🏢 Platform Fee</div>
+                    <div className="detail-value" style={{ color: '#1d4ed8', fontWeight: 'bold' }}>{bot.platform_rate || 1}% of profits</div>
                   </div>
                   <div className="detail-item">
                     <div className="detail-label">📊 Total Commission</div>
-                    <div className="detail-value">{bot.total_commission || (bot.developer_rate + bot.platform_rate) || 40}% (from your deposit)</div>
+                    <div className="detail-value">{bot.total_commission || 11}% (from your deposit)</div>
                   </div>
                   <div className="detail-item">
                     <div className="detail-label">Min Commission Deposit</div>
@@ -879,17 +874,9 @@ export default function Home() {
                         className="btn btn-success"
                         onClick={() => handleSimulateDay(bot.id)}
                         disabled={!!actionLoading || !isAccessible}
-                        style={{ flex: 2 }}
+                        style={{ width: '100%' }}
                       >
-                        {actionLoading === `simulate-${bot.id}` ? '⏳ Processing...' : '▶️ Next Day'}
-                      </button>
-                      <button 
-                        className="btn"
-                        onClick={() => handleReset(bot.id)}
-                        disabled={!!actionLoading}
-                        style={{ background: '#6366f1', color: 'white' }}
-                      >
-                        {actionLoading === `reset-${bot.id}` ? '⏳' : '🔄 Reset'}
+                        {actionLoading === `simulate-${bot.id}` ? '⏳ Processing...' : '▶️ Simulate Next Day'}
                       </button>
                     </div>
 
@@ -1036,18 +1023,6 @@ export default function Home() {
                   )}
                 </div>
 
-                {/* Vault Address */}
-                <div className="address" style={{ marginTop: '0.5rem' }}>
-                  <strong>Vault:</strong>{' '}
-                  <a 
-                    href={`https://stellar.expert/explorer/testnet/account/${bot.deposit_address}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: '#0070f3', fontSize: '0.8rem' }}
-                  >
-                    {bot.deposit_address ? `${bot.deposit_address.substring(0, 8)}...${bot.deposit_address.slice(-8)}` : 'Loading...'}
-                  </a>
-                </div>
               </div>
             );
           })}
@@ -1088,9 +1063,9 @@ export default function Home() {
             <div className="alert alert-info">
               <strong>Transaction Details:</strong><br />
               From: {wallet.publicKey?.substring(0, 12)}...{wallet.publicKey?.slice(-8)}<br />
-              To: {selectedBot.deposit_address?.substring(0, 12)}...{selectedBot.deposit_address?.slice(-8)}<br />
+              To: Smart Contract<br />
               Amount: {depositAmount} XLM<br />
-              Commission Rate: {selectedBot.commission_rate}% (profits only)
+              Commission: {selectedBot.total_commission || 11}% (on profits only)
             </div>
 
             <div className="modal-actions">
@@ -1162,6 +1137,168 @@ export default function Home() {
                 Cancel
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Daily Receipt Modal */}
+      {showReceipt && (
+        <div className="modal-overlay" onClick={() => setShowReceipt(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '450px' }}>
+            {/* Receipt Header */}
+            <div style={{ 
+              textAlign: 'center', 
+              borderBottom: '2px dashed #e5e7eb', 
+              paddingBottom: '1rem',
+              marginBottom: '1rem'
+            }}>
+              <h2 style={{ margin: 0, fontSize: '1.5rem' }}>🧾 Daily Trading Receipt</h2>
+              <p style={{ margin: '0.5rem 0 0 0', color: '#6b7280', fontSize: '0.9rem' }}>
+                Day {showReceipt.day} Summary
+              </p>
+            </div>
+
+            {/* Scenario-based Content */}
+            {showReceipt.scenario === 'profit' && (
+              <div style={{ 
+                background: 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)', 
+                padding: '1.5rem', 
+                borderRadius: '12px',
+                marginBottom: '1rem'
+              }}>
+                <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
+                  <span style={{ fontSize: '3rem' }}>📈</span>
+                  <h3 style={{ margin: '0.5rem 0', color: '#065f46' }}>Profitable Day!</h3>
+                  <p style={{ color: '#047857', fontSize: '1.25rem', fontWeight: 'bold' }}>
+                    +{showReceipt.performance_percent}% (+${showReceipt.profit_usd.toFixed(2)})
+                  </p>
+                </div>
+                
+                <div style={{ 
+                  background: 'white', 
+                  padding: '1rem', 
+                  borderRadius: '8px',
+                  border: '1px solid #10b981'
+                }}>
+                  <p style={{ margin: '0 0 0.75rem 0', fontWeight: 'bold', color: '#374151' }}>
+                    Commission Breakdown:
+                  </p>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                    <span>🧑‍💻 Developer Fee:</span>
+                    <span style={{ color: '#b45309', fontWeight: 'bold' }}>{showReceipt.developer_xlm.toFixed(4)} XLM</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                    <span>🏢 Platform Fee:</span>
+                    <span style={{ color: '#1d4ed8', fontWeight: 'bold' }}>{showReceipt.platform_xlm.toFixed(4)} XLM</span>
+                  </div>
+                  <div style={{ 
+                    display: 'flex', 
+                    justifyContent: 'space-between', 
+                    borderTop: '1px solid #e5e7eb',
+                    paddingTop: '0.5rem',
+                    marginTop: '0.5rem'
+                  }}>
+                    <span style={{ fontWeight: 'bold' }}>Total Deducted:</span>
+                    <span style={{ color: '#dc2626', fontWeight: 'bold' }}>{showReceipt.total_commission_xlm.toFixed(4)} XLM</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {showReceipt.scenario === 'loss' && (
+              <div style={{ 
+                background: 'linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)', 
+                padding: '1.5rem', 
+                borderRadius: '12px',
+                marginBottom: '1rem'
+              }}>
+                <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
+                  <span style={{ fontSize: '3rem' }}>📉</span>
+                  <h3 style={{ margin: '0.5rem 0', color: '#991b1b' }}>Loss Day</h3>
+                  <p style={{ color: '#dc2626', fontSize: '1.25rem', fontWeight: 'bold' }}>
+                    {showReceipt.performance_percent}% (${showReceipt.profit_usd.toFixed(2)})
+                  </p>
+                </div>
+                
+                <div style={{ 
+                  background: 'white', 
+                  padding: '1rem', 
+                  borderRadius: '8px',
+                  border: '1px solid #f87171',
+                  textAlign: 'center'
+                }}>
+                  <p style={{ margin: 0, fontSize: '1.1rem', color: '#059669' }}>
+                    ✅ <strong>No commission charged!</strong>
+                  </p>
+                  <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.9rem', color: '#6b7280' }}>
+                    You only pay commission on profitable days.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {showReceipt.scenario === 'below_hwm' && (
+              <div style={{ 
+                background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)', 
+                padding: '1.5rem', 
+                borderRadius: '12px',
+                marginBottom: '1rem'
+              }}>
+                <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
+                  <span style={{ fontSize: '3rem' }}>📊</span>
+                  <h3 style={{ margin: '0.5rem 0', color: '#92400e' }}>Recovery Day</h3>
+                  <p style={{ color: '#b45309', fontSize: '1.25rem', fontWeight: 'bold' }}>
+                    +{showReceipt.performance_percent}% (+${showReceipt.profit_usd.toFixed(2)})
+                  </p>
+                </div>
+                
+                <div style={{ 
+                  background: 'white', 
+                  padding: '1rem', 
+                  borderRadius: '8px',
+                  border: '1px solid #f59e0b',
+                  textAlign: 'center'
+                }}>
+                  <p style={{ margin: 0, fontSize: '1.1rem', color: '#059669' }}>
+                    ✅ <strong>No commission charged!</strong>
+                  </p>
+                  <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.9rem', color: '#6b7280' }}>
+                    Your balance hasn&apos;t exceeded the previous high-water mark yet.
+                  </p>
+                  <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.85rem', color: '#92400e' }}>
+                    High-Water Mark: <strong>${showReceipt.high_water_mark.toFixed(2)}</strong>
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Current Status */}
+            <div style={{ 
+              background: '#f9fafb', 
+              padding: '1rem', 
+              borderRadius: '8px',
+              marginBottom: '1rem'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                <span>Simulation Balance:</span>
+                <span style={{ fontWeight: 'bold', color: '#7c3aed' }}>${showReceipt.simulation_balance.toFixed(2)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Commission Balance:</span>
+                <span style={{ fontWeight: 'bold', color: showReceipt.commission_balance > 0 ? '#059669' : '#dc2626' }}>
+                  {showReceipt.commission_balance.toFixed(4)} XLM
+                </span>
+              </div>
+            </div>
+
+            {/* Close Button */}
+            <button 
+              className="btn btn-primary"
+              onClick={() => setShowReceipt(null)}
+              style={{ width: '100%' }}
+            >
+              Continue Trading
+            </button>
           </div>
         </div>
       )}
