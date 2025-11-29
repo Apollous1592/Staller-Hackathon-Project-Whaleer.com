@@ -724,35 +724,6 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Info Box */}
-      <div style={{ 
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 
-        color: 'white', 
-        padding: '1.5rem', 
-        borderRadius: '12px', 
-        marginBottom: '2rem' 
-      }}>
-        <h3 style={{ margin: '0 0 0.5rem 0' }}>📊 How It Works</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginTop: '1rem' }}>
-          <div style={{ background: 'rgba(255,255,255,0.1)', padding: '1rem', borderRadius: '8px' }}>
-            <strong>1️⃣ Deposit Commission</strong><br />
-            <small>Pay XLM to get bot access</small>
-          </div>
-          <div style={{ background: 'rgba(255,255,255,0.1)', padding: '1rem', borderRadius: '8px' }}>
-            <strong>2️⃣ $1000 Simulation</strong><br />
-            <small>Trade with virtual balance</small>
-          </div>
-          <div style={{ background: 'rgba(255,255,255,0.1)', padding: '1rem', borderRadius: '8px' }}>
-            <strong>3️⃣ Daily Performance</strong><br />
-            <small>Random returns -3% to +5%</small>
-          </div>
-          <div style={{ background: 'rgba(255,255,255,0.1)', padding: '1rem', borderRadius: '8px' }}>
-            <strong>4️⃣ Commission Deduction</strong><br />
-            <small>XLM deducted only on profits</small>
-          </div>
-        </div>
-      </div>
-
       {/* Bot Grid */}
       <h2 style={{ marginBottom: '1rem' }}>🤖 Trading Bots</h2>
       
