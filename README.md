@@ -35,7 +35,7 @@ Trading bots generate millions in profits every day — but developers, platform
 
 ### 2.2 Full System Flow
 
-![Full System Flow](assets/image3.png)
+![Full System Flow](assets/image4.png)
 
 ---
 
