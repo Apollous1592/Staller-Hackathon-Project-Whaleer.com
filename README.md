@@ -1,4 +1,4 @@
-## 🐋 Whaleer Profit-Sharing Protocol
+## 🐋 Whaleer Rental Engine
 
 On-Chain Profit Sharing for Trading Bots Using 3-Wallet Revenue Split + High-Water Mark Fee Model
 Powered by Stellar Soroban Smart Contracts
