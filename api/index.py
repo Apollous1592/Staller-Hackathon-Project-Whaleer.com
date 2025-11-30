@@ -79,10 +79,9 @@ NATIVE_ASSET_ID = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
 # In-memory storage
 user_sessions = {}
 
-# Trading Bots - Her bot için developer adresi ve komisyon oranları
-# total_commission_rate: Kârın yüzde kaçı toplam komisyon olarak kesilecek
-# platform_cut_percent: Toplam komisyonun yüzde kaçı platform'a gidecek (developer'dan kesilir)
-# Contract'a gönderilecek değerler hesaplanır (profit_share_bps, platform_cut_bps)
+# Trading Bots Configuration
+# total_commission_rate: Percentage of profit taken as total commission
+# platform_cut_percent: Percentage of commission that goes to platform (deducted from developer's share)
 TRADING_BOTS = [
     {
         "id": "bot-alpha",
@@ -99,9 +98,8 @@ TRADING_BOTS = [
         "id": "bot-beta",
         "name": "Bot Beta", 
         "strategy": "Arbitrage - Cross-exchange",
-        "total_commission_rate": 10,  # Kârın %10'u toplam komisyon
-        "platform_cut_percent": 10,   # Komisyonun %10'u platform'a (developer'dan kesilir)
-        # Developer net: %9, Platform: %1 (toplam %10)
+        "total_commission_rate": 10,
+        "platform_cut_percent": 10,
         "min_commission_deposit": 5,
         "developer": DEVELOPER_PUBLIC_KEY,
         "platform": PLATFORM_PUBLIC_KEY,
@@ -110,9 +108,8 @@ TRADING_BOTS = [
         "id": "bot-gamma",
         "name": "Bot Gamma",
         "strategy": "DCA - Smart timing",
-        "total_commission_rate": 10,  # Kârın %10'u toplam komisyon
-        "platform_cut_percent": 10,   # Komisyonun %10'u platform'a (developer'dan kesilir)
-        # Developer net: %9, Platform: %1 (toplam %10)
+        "total_commission_rate": 10,
+        "platform_cut_percent": 10,
         "min_commission_deposit": 5,
         "developer": DEVELOPER_PUBLIC_KEY,
         "platform": PLATFORM_PUBLIC_KEY,
@@ -147,21 +144,16 @@ def generate_daily_performance():
 
 def calculate_contract_rates(total_commission_rate: float, platform_cut_percent: float):
     """
-    Developer'ın belirlediği toplam komisyon oranından contract'a gönderilecek
-    profit_share_bps ve platform_cut_bps hesaplar.
+    Calculate BPS values for smart contract from commission rates.
     
-    Yeni mantık:
-    - Developer %10 komisyon belirlemiş
-    - Platform sabit %10 alıyor (developer'ın payından)
+    Example: total_commission_rate=10, platform_cut_percent=10
+    - User pays: 10% of profit
+    - Platform gets: 10% of 10% = 1% of profit
+    - Developer gets: 10% - 1% = 9% of profit
     
-    Örnek: total_commission_rate=10, platform_cut_percent=10
-    - Kullanıcıdan kesilen: %10
-    - Platform: %10'un %10'u = %1
-    - Developer net: %10 - %1 = %9
-    
-    Contract'a:
-    - profit_share_bps = 1000 (%10 toplam komisyon)
-    - platform_cut_bps = 1000 (%10 of commission goes to platform)
+    Returns:
+    - profit_share_bps = 1000 (10% total commission)
+    - platform_cut_bps = 1000 (10% of commission to platform)
     """
     profit_share_bps = int(total_commission_rate * 100)  # %10 → 1000
     platform_cut_bps = int(platform_cut_percent * 100)   # %10 → 1000
@@ -172,20 +164,20 @@ def calculate_contract_rates(total_commission_rate: float, platform_cut_percent:
 
 def invoke_contract_with_simulation(function_name: str, params: list, signer_secret: str):
     """
-    Arkadaşın init_vault.py'den adapte edildi.
-    Önce simülasyon yapar, hataları detaylı loglar, sonra gönderir.
+    Invoke Soroban contract with simulation first.
+    Simulates transaction, logs errors, then submits.
     """
     try:
         signer_keypair = Keypair.from_secret(signer_secret)
         
-        # Horizon'dan sequence number al (arkadaşın yöntemi)
+        # Load account from Horizon for sequence number
         source_account = server.load_account(signer_keypair.public_key)
         
         tx = (
             TransactionBuilder(
                 source_account=source_account,
                 network_passphrase=NETWORK_PASSPHRASE,
-                base_fee=100,  # Simülasyon sonrası artabilir
+                base_fee=100,
             )
             .set_timeout(30)
             .append_invoke_contract_function_op(
@@ -196,25 +188,25 @@ def invoke_contract_with_simulation(function_name: str, params: list, signer_sec
             .build()
         )
         
-        # Simülasyon yap (arkadaşın eklediği özellik)
-        print(f"⏳ Simülasyon yapılıyor: {function_name}...")
+        # Simulate transaction first
+        print(f"⏳ Simulating: {function_name}...")
         sim_resp = soroban_server.simulate_transaction(tx)
         
-        # Simülasyon hata kontrolü
+        # Check simulation errors
         if hasattr(sim_resp, 'error') and sim_resp.error:
             print(f"🔴 Simulation Error: {sim_resp.error}")
-            raise RuntimeError(f"Simülasyon Başarısız: {sim_resp.error}")
+            raise RuntimeError(f"Simulation Failed: {sim_resp.error}")
         
-        print(f"✅ Simülasyon başarılı!")
+        print(f"✅ Simulation successful!")
         
-        # Simülasyon verilerini işleme ekle
+        # Prepare transaction with simulation data
         tx = soroban_server.prepare_transaction(tx, sim_resp)
         
-        # İmzala
+        # Sign transaction
         tx.sign(signer_keypair)
         
-        # Gönder
-        print(f"🚀 İşlem ağa gönderiliyor: {function_name}...")
+        # Submit to network
+        print(f"🚀 Submitting to network: {function_name}...")
         response = soroban_server.send_transaction(tx)
         
         if hasattr(response, 'status') and response.status == "ERROR":
@@ -241,7 +233,7 @@ def invoke_contract_with_simulation(function_name: str, params: list, signer_sec
 
 
 def invoke_contract(function_name: str, params: list, signer_secret: str):
-    """Generic function to invoke Soroban smart contract methods (eski versiyon)"""
+    """Generic function to invoke Soroban smart contract methods"""
     try:
         signer_keypair = Keypair.from_secret(signer_secret)
         source_account = soroban_server.load_account(signer_keypair.public_key)
@@ -290,22 +282,18 @@ def contract_init_vault(
     user_id: int,
     user_address: str,
     developer_address: str,
-    total_commission_rate: float = 10,  # Developer'ın belirlediği toplam oran
-    platform_cut_percent: float = 10,   # Sabit %10 platform kesintisi
+    total_commission_rate: float = 10,
+    platform_cut_percent: float = 10,
 ):
     """
-    Soroban kontratındaki init_vault fonksiyonunu çağırır.
+    Initialize vault in Soroban smart contract.
     
-    Yeni davranış:
-    - Developer %10 komisyon belirlemiş
-    - Platform sabit %10 alıyor (developer'ın payından)
-    
-    Örnek: 100 XLM kâr
-    - Toplam komisyon: 10 XLM (%10)
-    - Platform: 1 XLM (%10 of 10 XLM)
-    - Developer net: 9 XLM
+    Example: 100 XLM profit
+    - Total commission: 10 XLM (10%)
+    - Platform: 1 XLM (10% of commission)
+    - Developer: 9 XLM (remaining)
     """
-    # Platform rate hesapla (gösterim için)
+    # Calculate rates for display
     platform_rate = total_commission_rate * platform_cut_percent / 100
     developer_net = total_commission_rate - platform_rate
     
@@ -321,28 +309,28 @@ def contract_init_vault(
     print(f"Platform Cut: {platform_cut_percent}% of commission → {platform_rate}% of profit")
     print(f"Developer Net: {developer_net}% of profit")
     
-    # Contract'a gönderilecek BPS değerlerini hesapla
+    # Calculate BPS values for contract
     profit_share_bps, platform_cut_bps = calculate_contract_rates(total_commission_rate, platform_cut_percent)
     
-    print(f"→ profit_share_bps: {profit_share_bps} (toplam komisyon oranı)")
-    print(f"→ platform_cut_bps: {platform_cut_bps} (platform'un komisyondan aldığı pay)")
+    print(f"→ profit_share_bps: {profit_share_bps} (total commission rate)")
+    print(f"→ platform_cut_bps: {platform_cut_bps} (platform's share of commission)")
     
     # Validation
     if profit_share_bps < 0 or platform_cut_bps < 0:
-        raise ValueError("Oranlar negatif olamaz.")
+        raise ValueError("Rates cannot be negative.")
     if profit_share_bps > 10_000 or platform_cut_bps > 10_000:
-        raise ValueError("Oranlar %100 (10000 bps) üzerinde olamaz.")
+        raise ValueError("Rates cannot exceed 100% (10000 bps).")
     
-    # fn init_vault(env, bot_id, user_id, user_address, developer, platform, asset, profit_share_bps, platform_cut_bps)
+    # Contract function: init_vault(bot_id, user_id, user_address, developer, platform, asset, profit_share_bps, platform_cut_bps)
     params = [
         scval.to_uint64(bot_id),
         scval.to_uint64(user_id),
         scval.to_address(user_address),
-        scval.to_address(developer_address),     # developer - kar payı buraya
-        scval.to_address(PLATFORM_PUBLIC_KEY),   # platform - platform kesintisi buraya
-        scval.to_address(NATIVE_ASSET_ID),       # asset (XLM)
-        scval.to_uint32(profit_share_bps),       # toplam komisyon oranı
-        scval.to_uint32(platform_cut_bps),       # platform'un payı
+        scval.to_address(developer_address),
+        scval.to_address(PLATFORM_PUBLIC_KEY),
+        scval.to_address(NATIVE_ASSET_ID),
+        scval.to_uint32(profit_share_bps),
+        scval.to_uint32(platform_cut_bps),
     ]
     
     return invoke_contract_with_simulation("init_vault", params, PLATFORM_SECRET_KEY)
@@ -557,12 +545,10 @@ def create_deposit_tx():
         bot_index = get_bot_index(bot_id)
         user_hash = get_user_hash(user_public_key)
         
-        # Bot'tan developer ve oranları al
+        # Get bot configuration
         developer_address = bot['developer']
-        total_rate = bot['total_commission_rate']  # Developer'ın belirlediği toplam oran
-        platform_cut = bot['platform_cut_percent']  # Sabit %10 platform kesintisi
-        
-        # Platform developer'dan alıyor
+        total_rate = bot['total_commission_rate']
+        platform_cut = bot['platform_cut_percent']
         platform_rate = total_rate * platform_cut / 100
         developer_net_rate = total_rate - platform_rate
         
@@ -577,7 +563,7 @@ def create_deposit_tx():
                 platform_cut_percent=platform_cut,
             )
         except Exception as e:
-            print(f"[INIT_VAULT] Muhtemelen zaten var: {e}")
+            print(f"[INIT_VAULT] Already exists or error: {e}")
         
         # Create contract deposit XDR
         xdr, error = contract_deposit(bot_index, user_hash, amount, user_public_key)
@@ -669,13 +655,7 @@ def submit_transaction():
 
 @app.route('/simulate-day', methods=['POST'])
 def simulate_day():
-    """
-    Simulate next day's trading
-    Komisyon dağılımı (arkadaşın init_vault.py mantığına göre):
-    - Developer'a: profit_share_rate % (ör: %30)
-    - Platform'a: platform_cut_rate % (ör: %10)
-    - Toplam kesinti: %40
-    """
+    """Simulate next day's trading and calculate commissions"""
     try:
         data = request.json
         bot_id = data.get('bot_id')
@@ -719,26 +699,18 @@ def simulate_day():
         # Only charge commission on NEW profits above HWM
         if new_balance > high_water_mark:
             taxable_profit = new_balance - high_water_mark
-            taxable_profit_xlm = taxable_profit / xlm_usd_rate  # USD → XLM
+            taxable_profit_xlm = taxable_profit / xlm_usd_rate
             
-            # Komisyon mantığı:
-            # - Toplam komisyon: Kârın %10'u (total_commission_rate)
-            # - Platform payı: Toplam komisyonun %10'u (platform_cut_percent)
-            # - Developer payı: Toplam komisyon - Platform payı
-            # Örnek: $100 kâr → $10 toplam komisyon → $1 platform, $9 developer
+            total_commission_rate = bot['total_commission_rate']
+            platform_cut_percent = bot['platform_cut_percent']
             
-            total_commission_rate = bot['total_commission_rate']  # %10
-            platform_cut_percent = bot['platform_cut_percent']    # %10 of commission
-            
-            # Toplam komisyonu hesapla
+            # Calculate commissions
             total_commission_xlm = taxable_profit_xlm * (total_commission_rate / 100)
-            
-            # Platform developer'ın payından alıyor
             platform_commission_xlm = total_commission_xlm * (platform_cut_percent / 100)
             developer_commission_xlm = total_commission_xlm - platform_commission_xlm
             
             if total_commission_xlm > bot_session['commission_balance']:
-                # Oran koruyarak düşür
+                # Reduce proportionally if insufficient balance
                 ratio = bot_session['commission_balance'] / total_commission_xlm
                 taxable_profit_xlm *= ratio
                 total_commission_xlm = bot_session['commission_balance']
@@ -747,8 +719,7 @@ def simulate_day():
             
             bot_session['high_water_mark'] = new_balance
             
-            # Call contract to settle profit
-            # Contract'a KÂR MİKTARINI gönderiyoruz, contract toplam komisyonu hesaplayıp dağıtacak
+            # Call contract to settle profit (contract calculates and distributes commissions)
             if taxable_profit_xlm > 0.0001:
                 bot_index = get_bot_index(bot_id)
                 user_hash = get_user_hash(user_public_key)
@@ -853,7 +824,6 @@ def withdraw():
         print(f"[WITHDRAW] Error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
-
 @app.route('/submit-withdraw', methods=['POST'])
 def submit_withdraw():
     """Submit signed withdraw transaction"""
@@ -888,7 +858,6 @@ def submit_withdraw():
     except Exception as e:
         print(f"[SUBMIT-WITHDRAW] Error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
-
 
 @app.route('/reset-simulation', methods=['POST'])
 def reset_simulation():
@@ -940,12 +909,10 @@ def reset_simulation():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
-
 @app.route('/topup', methods=['POST'])
 def topup():
     """Create topup transaction (same as deposit)"""
     return create_deposit_tx()
-
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -955,7 +922,6 @@ def health():
         "contract_id": CONTRACT_ID,
         "developer": DEVELOPER_PUBLIC_KEY,
     })
-
 
 @app.route('/contract-info', methods=['GET'])
 def contract_info():
@@ -968,7 +934,6 @@ def contract_info():
         "network": "testnet",
         "explorer": f"https://stellar.expert/explorer/testnet/contract/{CONTRACT_ID}"
     })
-
 
 if __name__ == '__main__':
     print("=" * 60)
