@@ -1,10 +1,10 @@
-🐋 Whaleer Profit-Sharing Protocol
+## 🐋 Whaleer Profit-Sharing Protocol
 
 On-Chain Profit Sharing for Trading Bots Using 3-Wallet Revenue Split + High-Water Mark Fee Model
 Powered by Stellar Soroban Smart Contracts
 
 ---
-1. Overview
+## 1. Overview
 
 Trading bots generate millions in profits every day — but developers, platforms, and users lack a fair, automated, and transparent revenue-sharing mechanism.
 
@@ -25,7 +25,7 @@ Trading bots generate millions in profits every day — but developers, platform
 - Automated fee distribution via Soroban Smart Contracts
 
 
-2. System Architecture
+## 2. System Architecture
 
 ### 2.1 Three-Wallet Revenue Model
 
