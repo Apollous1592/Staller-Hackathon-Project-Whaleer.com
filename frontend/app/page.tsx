@@ -96,7 +96,7 @@ export default function Home() {
     commission_balance: number;
   } | null>(null);
 
-  // 1) Freighter var mı yok mu kontrolü
+  // 1) Freighter var mı yok mu kontrolü (timeout'lu)
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -106,19 +106,38 @@ export default function Home() {
       // "Connecting..." state'i
       setFreighterInstalled(null);
 
-      try {
-        // isConnected her zaman çalışıyor (Freighter olmasa bile false dönüyor)
-        // Bu yüzden getNetwork ile doğrulama yapıyoruz
-        const connResult = await isConnected();
-        
-        if (cancelled) return;
-        console.log("isConnected result:", connResult);
+      // 2 saniyelik timeout
+      const timeoutPromise = new Promise<{ timeout: true }>((resolve) =>
+        setTimeout(() => resolve({ timeout: true }), 2000)
+      );
 
-        // Eğer zaten bağlıysa (isConnected: true), kesin yüklü
-        if (connResult?.isConnected === true) {
-          console.log("Freighter connected!");
-          setFreighterInstalled(true);
-          
+      try {
+        const result: any = await Promise.race([
+          isConnected(),   // Extension varsa burası döner
+          timeoutPromise,  // Yoksa 2s sonra timeout
+        ]);
+
+        if (cancelled) return;
+
+        // Timeout → büyük ihtimalle extension yok
+        if ((result as any).timeout) {
+          console.log("Freighter probably NOT installed (timeout)");
+          setFreighterInstalled(false);
+          return;
+        }
+
+        // API'den hata geldiyse yine yok varsay
+        if (!result || result.error) {
+          console.log("Freighter API error:", result?.error);
+          setFreighterInstalled(false);
+          return;
+        }
+
+        // Buraya geldiysek extension VAR
+        setFreighterInstalled(true);
+
+        // Daha önce siteye bağlanmışsa (isConnected true)
+        if (result.isConnected) {
           const [addressResult, networkResult] = await Promise.all([
             getAddress(),
             getNetwork(),
@@ -131,48 +150,19 @@ export default function Home() {
               network: networkResult?.network || null,
             });
           }
-          return;
         }
-
-        // isConnected false - Freighter yüklü mü değil mi emin değiliz
-        // getNetwork ile kontrol edelim - bu sadece Freighter yüklüyse çalışır
-        try {
-          const networkResult = await Promise.race([
-            getNetwork(),
-            new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500))
-          ]);
-          
-          if (cancelled) return;
-          console.log("getNetwork result:", networkResult);
-
-          // Eğer network bilgisi geldiyse, Freighter yüklü ama bağlı değil
-          if (networkResult && (networkResult as any).network) {
-            console.log("Freighter installed but not connected");
-            setFreighterInstalled(true);
-            return;
-          }
-        } catch (netErr) {
-          console.log("getNetwork failed:", netErr);
-        }
-
-        // Buraya geldiysek Freighter yüklü değil
-        console.log("Freighter NOT installed");
-        setFreighterInstalled(false);
-
       } catch (e) {
-        console.log("Freighter check error:", e);
+        console.log("Freighter check failed:", e);
         if (!cancelled) {
           setFreighterInstalled(false);
         }
       }
     };
 
-    // 300ms bekle ki extension inject olsun
-    const timer = setTimeout(checkFreighter, 300);
+    checkFreighter();
 
     return () => {
       cancelled = true;
-      clearTimeout(timer);
     };
   }, []);
 
@@ -691,8 +681,8 @@ export default function Home() {
   return (
     <div className="container">
       <header className="header">
-        <h1>🐋 Profit Sharing Platform</h1>
-        <p>Follow trading bots, simulate with $100 virtual balance, pay commission only on profits!</p>
+        <h1>🐋 Whaleer Rental Engine</h1>
+        <p>Follow trading bots, simulate with $100 virtual balance, pay commission only on profits! <br /> Please Check Developer Wallet, Platform Wallet, and Contract on Stellar Explorer below. </p>
 
         {/* Stellar Explorer Quick Links */}
         <div style={{
@@ -957,7 +947,7 @@ export default function Home() {
                         padding: '0.5rem',
                         borderRadius: '6px'
                       }}>
-                        <div className="detail-label">💰 Commission Balance (XLM)</div>
+                        <div className="detail-label">💰 Deposit Balance (XLM)</div>
                         <div className="detail-value" style={{
                           color: activeBotInfo.commission_balance > 0 ? '#059669' : '#dc2626',
                           fontWeight: 'bold',
@@ -1015,8 +1005,8 @@ export default function Home() {
                         marginBottom: '0.5rem',
                         fontSize: '0.85rem'
                       }}>
-                        ⚠️ <strong>Commission balance depleted!</strong><br />
-                        Add more commission to continue.
+                        ⚠️ <strong>Deposit balance depleted!</strong><br />
+                        Add more deposit to continue.
                       </div>
                     )}
 
@@ -1042,7 +1032,7 @@ export default function Home() {
                         marginBottom: '0.5rem'
                       }}
                     >
-                      ➕ Add Commission
+                      ➕ Edit Deposit Balance
                     </button>
 
                     {isExpanded && activeBotInfo.daily_history && (
@@ -1241,21 +1231,21 @@ export default function Home() {
       {showTopupModal && selectedBot && (
         <div className="modal-overlay" onClick={() => setShowTopupModal(false)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
-            <h2>➕ Add Commission</h2>
+            <h2>➕ Edit Deposit Balance</h2>
             <p style={{ marginBottom: '1rem', color: '#6b7280' }}>
-              Add more commission balance for <strong>{selectedBot.name}</strong>.
+              Add more deposit balance for <strong>{selectedBot.name}</strong>.
             </p>
 
             <div style={{ background: '#fef3c7', padding: '1rem', borderRadius: '8px', marginBottom: '1rem' }}>
               <strong>💡 Info:</strong>
               <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.9rem' }}>
-                When you add more commission, your simulation continues from where it left off.
+                When you add more deposit balance, your simulation continues from where it left off.
                 If your balance runs out, bot access closes but you can reset to start fresh.
               </p>
             </div>
 
             <div className="form-group">
-              <label className="form-label">Additional Commission Amount (XLM)</label>
+              <label className="form-label">Additional Deposit Amount (XLM)</label>
               <input
                 type="number"
                 className="form-input"
@@ -1331,7 +1321,7 @@ export default function Home() {
                     Commission Breakdown:
                   </p>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                    <span>🧑‍💻 Developer Fee:</span>
+                    <span>🧑‍💻 Developer Fee: </span>
                     <span style={{ color: '#b45309', fontWeight: 'bold' }}>{showReceipt.developer_xlm.toFixed(4)} XLM</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
