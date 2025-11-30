@@ -111,25 +111,14 @@ A hedge-fund-grade performance fee model ensuring fairness.
 
 ### Example
 
-```
-Start:  $100 → HWM = $100
-Day 1:  $120 → Fee on +$20  → HWM = $120
-Day 2:  $90  → No fee       → HWM = $120 (unchanged)
-Day 3:  $130 → Fee on +$10  → HWM = $130 (only new profit above $120)
-```
+| Day | Balance | Action | HWM |
+|-----|---------|--------|-----|
+| Start | $100 | — | $100 |
+| Day 1 | $120 | Fee on +$20 | $120 |
+| Day 2 | $90 | No fee (loss) | $120 |
+| Day 3 | $130 | Fee on +$10 only | $130 |
 
-```
-                    Balance
-        $130 ─ ─ ─ ─ ─ ─ ─ ─●─ ─ ─ ─ HWM Updated
-                          ╱
-        $120 ─ ─ ─●─ ─ ─ ╱─ ─ ─ ─ ─ HWM
-                 ╱     ╱
-        $100 ───●     ╱
-                 ╲   ╱
-         $90 ─ ─ ─●─ ─ ─ ─ ─ ─ ─ ─ No Fee (below HWM)
-              
-             Day1  Day2  Day3
-```
+![High-Water Mark Fee Mechanism](assets/image.png)
 
 ---
 

@@ -630,11 +630,113 @@ export default function Home() {
     );
   }
 
+  // Stellar Explorer URLs
+  const DEVELOPER_ADDRESS = "GARPOAGOQSJEN3ODZSDZZT63PLDXDP6QN5PVHY3CD4JMITGUMQPR2MGH";
+  const PLATFORM_ADDRESS = "GCF6SYQVT6F6AGOGAKKD4FYN7VEZI736B5F6GIKAE5CNWH2U4JJMFWOA";
+  const CONTRACT_ADDRESS = "CBEZLTP6IW3KETVKHHQIZP6MV4N5ROD3O2YMXE3WPDBHWYO53UBDJDFI";
+
   return (
     <div className="container">
       <header className="header">
         <h1>🐋 Profit Sharing Platform</h1>
         <p>Follow trading bots, simulate with $100 virtual balance, pay commission only on profits!</p>
+        
+        {/* Stellar Explorer Quick Links */}
+        <div style={{ 
+          display: 'flex', 
+          gap: '0.75rem', 
+          justifyContent: 'center', 
+          marginTop: '1rem',
+          flexWrap: 'wrap'
+        }}>
+          <a
+            href={`https://stellar.expert/explorer/testnet/account/${DEVELOPER_ADDRESS}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              padding: '0.5rem 1rem',
+              background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+              color: 'white',
+              borderRadius: '8px',
+              fontSize: '0.85rem',
+              fontWeight: '500',
+              textDecoration: 'none',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+              transition: 'transform 0.2s, box-shadow 0.2s'
+            }}
+            onMouseOver={(e) => {
+              e.currentTarget.style.transform = 'translateY(-2px)';
+              e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.15)';
+            }}
+            onMouseOut={(e) => {
+              e.currentTarget.style.transform = 'translateY(0)';
+              e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
+            }}
+          >
+            👨‍💻 Developer Wallet
+          </a>
+          <a
+            href={`https://stellar.expert/explorer/testnet/account/${PLATFORM_ADDRESS}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              padding: '0.5rem 1rem',
+              background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+              color: 'white',
+              borderRadius: '8px',
+              fontSize: '0.85rem',
+              fontWeight: '500',
+              textDecoration: 'none',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+              transition: 'transform 0.2s, box-shadow 0.2s'
+            }}
+            onMouseOver={(e) => {
+              e.currentTarget.style.transform = 'translateY(-2px)';
+              e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.15)';
+            }}
+            onMouseOut={(e) => {
+              e.currentTarget.style.transform = 'translateY(0)';
+              e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
+            }}
+          >
+            🏢 Platform Wallet
+          </a>
+          <a
+            href={`https://stellar.expert/explorer/testnet/contract/${CONTRACT_ADDRESS}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              padding: '0.5rem 1rem',
+              background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+              color: 'white',
+              borderRadius: '8px',
+              fontSize: '0.85rem',
+              fontWeight: '500',
+              textDecoration: 'none',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+              transition: 'transform 0.2s, box-shadow 0.2s'
+            }}
+            onMouseOver={(e) => {
+              e.currentTarget.style.transform = 'translateY(-2px)';
+              e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.15)';
+            }}
+            onMouseOut={(e) => {
+              e.currentTarget.style.transform = 'translateY(0)';
+              e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
+            }}
+          >
+            📜 Smart Contract
+          </a>
+        </div>
       </header>
 
       {message && (
