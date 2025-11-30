@@ -116,21 +116,7 @@ Total Commission: $10 (10% of profit)
      └──► Platform: $1 (10% of $10)
 ```
 
-### Soroban BPS Conversion
 
-Backend converts percentages to Soroban Basis Points (BPS):
-
-```python
-profit_share_bps = total_commission_rate * 100   # 10% → 1000
-platform_cut_bps = platform_cut_percent * 100    # 10% → 1000
-```
-
-Contract calculation:
-```rust
-total_commission = profit * profit_share_bps / 10000;
-platform_fee = total_commission * platform_cut_bps / 10000;
-developer_fee = total_commission - platform_fee;
-```
 
 ---
 
