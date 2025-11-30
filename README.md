@@ -139,6 +139,14 @@ developer_fee = total_commission - platform_fee;
 
 | Function | Description | Signer |
 |----------|-------------|--------|
+| `init` | Initialize contract with admin address | Admin (one-time) |
+| `init_vault` | Creates storage for user-bot pair | Platform (backend) |
+| `deposit` | User funds fee reserve | User (Freighter) |
+| `withdraw` | User withdraws remaining fees | User (Freighter) |
+| `settle_profit` | Distributes fee to dev + platform | Platform (backend) |
+
+| Function | Description | Signer |
+|----------|-------------|--------|
 | `init_vault` | Creates storage for user-bot pair | Platform (backend) |
 | `deposit` | User funds fee reserve | User (Freighter) |
 | `withdraw` | User withdraws remaining fees | User (Freighter) |
